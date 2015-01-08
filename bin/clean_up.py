@@ -6,12 +6,14 @@ import commands
 import string
 
 ################################################################################
+
 def log_print(print_str):
     os.system("echo " + str(print_str))
 
 def rm_command(filename):
     if (os.path.isfile(filename)):
         os.system("rm " + filename)
+
         
 ################################################################################
 if len(sys.argv) >= 4:
@@ -19,6 +21,7 @@ if len(sys.argv) >= 4:
     Nthread1 =  int(sys.argv[2])
     Nthread2 =  int(sys.argv[3])
 else:
+    log_print("Remove all the intermediate files from runLSC")
     log_print("usage: python clean_up.py temp_foldername Nthread1 Nthread2 ")
     log_print("or ./clean_up.py  temp_foldername Nthread1 Nthread2")
     sys.exit(1)
