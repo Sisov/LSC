@@ -1,4 +1,5 @@
-#!/usr/bin/python
+#!/hsgs/software/python/2.7.3.mkl/bin/python
+##/usr/bin/python
 
 import sys
 import struct
@@ -10,14 +11,7 @@ from copy import *
 import threading
 import string
 import commands
-
-def log_print(print_str):
-    os.system("echo '" + str(print_str) + "'")
-
-def log_command(print_str):
-    os.system("echo " + str(print_str))
-    os.system(str(print_str))
-
+from commonLSC import log_command, log_print
 
 ################################################################################
 
@@ -237,7 +231,7 @@ if ((mode == 0) or
             for ext in ext_ls:
                 mv_cmd = "mv " + temp_foldername + "SR.fa" + ext + " "  + temp_foldername + "SR.fa" + ext + ".cps"
                 log_command(mv_cmd)
-            splitSR_cmd = "split -l " + str(Nsplitline/2) + " " + SR_path + "SR.fa.idx " + temp_foldername + "SR.fa."
+            splitSR_cmd = "split -l " + str(Nsplitline/2) + " " + SR_pathfilename.strip()[:-3] + "idx " + temp_foldername + "SR.fa."
             log_command(splitSR_cmd)
             for ext in ext_ls:
                 mv_cmd = "mv " + temp_foldername + "SR.fa" + ext + " "  + temp_foldername + "SR.fa" + ext + ".idx"
@@ -454,7 +448,7 @@ if ((mode == 0) or
         i=0
         T_novoalign_ls=[]
         for ext in ext_ls:
-            novoalign_cmd = "novoalign " + novoalign_options + " -d " + temp_foldername + LR_filename + ".cps.nix -f " + temp_foldername + SR_filename + ext + ".cps > " + temp_foldername + SR_filename + ext + ".cps.sam" 
+            novoalign_cmd = "novoalign " + novoalign_options + " -r Ex " + str(LR_NR) + " -d " + temp_foldername + LR_filename + ".cps.nix -f " + temp_foldername + SR_filename + ext + ".cps > " + temp_foldername + SR_filename + ext + ".cps.sam" 
             T_novoalign_ls.append( threading.Thread(target=log_command, args=(novoalign_cmd,)) )
             T_novoalign_ls[i].start()
             i+=1
@@ -481,59 +475,64 @@ if ((mode == 0) or
         T_samParser_ls.append( threading.Thread(target=log_command, args=(samParser_cmd,)) )
         T_samParser_ls[i].start()
         i+=1
+    i = 0
     for T in T_samParser_ls:
         T.join()
-
+        if (clean_up == 2):
+            delSRsam_cmd = "rm " + temp_foldername + SR_filename + ext_ls[i] + ".cps.sam &"
+            i += 1
+            
     log_print(str(datetime.datetime.now()-t0))
     
 ##########################################
 # Build complete CPS and IDX files
-    if (SR_filetype != "cps"):
-        log_print("===cat SR.??.cps:===")    
-        temp_filename_ls = []
+    if (SR_filetype != "cps"): 
+        if (clean_up < 2):
+            log_print("===cat SR.??.cps:===")    
+            for ext in ext_ls:
+                log_command( "cat " + temp_foldername + SR_filename + ext + ".cps >> " + temp_foldername + SR_filename + ".cps", printcommand=False )
+                log_command( "rm " + temp_foldername + SR_filename + ext + ".cps ", printcommand=False )
+            log_print(str(datetime.datetime.now()-t0))
+            ####################
+            log_print("===cat SR.??.idx:===")    
+            for ext in ext_ls:
+                log_command( "cat " + temp_foldername + SR_filename + ext + ".idx >> " + temp_foldername + SR_filename + ".idx", printcommand=False )
+                log_command( "rm " + temp_foldername + SR_filename + ext + ".idx ", printcommand=False )
+            log_print(str(datetime.datetime.now()-t0))
+        elif (clean_up == 2):
+            for ext in ext_ls:
+                delSRidx_aa_cmd = "rm " + temp_foldername + SR_filename + ext + ".idx &"
+                delSRcps_aa_cmd = "rm " + temp_foldername + SR_filename + ext + ".cps &"
+                log_command(delSRcps_aa_cmd, printcommand=False )
+                log_command(delSRidx_aa_cmd, printcommand=False )
+    else:
         for ext in ext_ls:
-            temp_filename_ls.append( temp_foldername + SR_filename + ext + ".cps" )
-        log_command( "cat " + ' '.join(temp_filename_ls) + " > " + temp_foldername + SR_filename + ".cps" )
-        log_print(str(datetime.datetime.now()-t0))
-        ####################
-        log_print("===cat SR.??.idx:===")    
-        temp_filename_ls = []
-        for ext in ext_ls:
-            temp_filename_ls.append( temp_foldername + SR_filename + ext + ".idx" )
-        log_command( "cat " + ' '.join(temp_filename_ls) + " > " + temp_foldername + SR_filename + ".idx" )
-        log_print(str(datetime.datetime.now()-t0))
+            log_command("rm " + temp_foldername + SR_filename + ext + ".cps &", printcommand=False)
+            log_command("rm " + temp_foldername + SR_filename + ext + ".idx &", printcommand=False)
         ####################
 
     # Build complete SAM and NAV files
     ####################
-    log_print("===cat SR.??.cps.sam :===")    
-    temp_filename_ls = []
-    for ext in ext_ls:
-        temp_filename_ls.append( temp_foldername + SR_filename + ext + ".cps.sam" )
-    log_command( "cat " + ' '.join(temp_filename_ls) + " > " + temp_foldername + SR_filename + ".cps.sam" )
-    log_print(str(datetime.datetime.now()-t0))
+    if (clean_up < 2):
+        log_print("===cat SR.??.cps.sam :===")    
+        log_command("touch " + temp_foldername + SR_filename + ".cps.sam")
+        for ext in ext_ls:
+            log_command("cat " + temp_foldername + SR_filename + ext + ".cps.sam" + " >> " + temp_foldername + SR_filename + ".cps.sam", printcommand=False )
+            log_command("rm " + temp_foldername + SR_filename + ext + ".cps.sam &", printcommand=False)       
+        log_print(str(datetime.datetime.now()-t0))
+    elif (clean_up == 2):
+        # Remove sam, alignment summary (.nav, .map) files per thread
+        for ext in ext_ls:
+            log_command("rm " + temp_foldername + SR_filename + ext + ".cps.sam &", printcommand=False)
+    
     ####################
     log_print("===cat SR.??.cps.nav :===")    
-    temp_filename_ls = []
+    log_command("touch " + temp_foldername + SR_filename + ".cps.nav")
     for ext in ext_ls:
-        temp_filename_ls.append( temp_foldername + SR_filename + ext + ".cps.nav" )
-    log_command( "cat " + ' '.join(temp_filename_ls) + " > " + temp_foldername + SR_filename + ".cps.nav" )
+        log_command("cat " + temp_foldername + SR_filename + ext + ".cps.nav" + " >> " + temp_foldername + SR_filename + ".cps.nav", printcommand=False )
+        log_command("rm " + temp_foldername + SR_filename + ext + ".cps.nav &", printcommand=False)
     log_print(str(datetime.datetime.now()-t0))
-    ####################    
-
-    ####################
-    # Remove sam, alignment summary (.nav, .map) files per thread
-    if (clean_up == 1):
-        for ext in ext_ls:
-            delSRnav_cmd = "rm " + temp_foldername + SR_filename + ext + ".cps.nav &"
-            delSRsam_cmd = "rm " + temp_foldername + SR_filename + ext + ".cps.sam &"
-            delSRidx_aa_cmd = "rm " + temp_foldername + SR_filename + ext + ".idx &"
-            delSRcps_aa_cmd = "rm " + temp_foldername + SR_filename + ext + ".cps &"
-            log_command(delSRcps_aa_cmd)
-            log_command(delSRidx_aa_cmd)
-            log_command(delSRnav_cmd)
-            log_command(delSRsam_cmd)
-            
+                
     ####################
     for ext in ext_ls:
         log_command("mv " + temp_foldername + "SR.fa" + ext + ".cps.samParser.log " + temp_foldername + "log")
@@ -577,6 +576,8 @@ for i in range(Nthread2):
     
 splitLR_SR_map_cmd = "split -l " + str(Nsplitline) + " " + temp_foldername + "LR_SR.map" + ' ' + temp_foldername + "LR_SR.map" +"."
 log_command(splitLR_SR_map_cmd)
+if (clean_up == 2):
+    log_command("rm " + temp_foldername + "LR_SR.map ")
 
 log_print(str(datetime.datetime.now()-t0))
 
@@ -598,7 +599,7 @@ for T in T_correct_for_piece_ls:
 log_print(str(datetime.datetime.now()-t0))
 
 ####################
-if (clean_up == 1):
+if (clean_up >= 1):
     for ext in ext2_ls:
         delLR_SR_map_aa_tmp_cmd = "rm " + temp_foldername + "LR_SR.map" + ext 
         log_command(delLR_SR_map_aa_tmp_cmd)
@@ -635,7 +636,7 @@ for ext in ext2_ls:
 log_command( "cat " +  ' '.join(temp_filename_ls) + " > " + output_foldername + "uncorrected_LR.fa" )
 
 ####################
-if (clean_up == 1):
+if (clean_up >= 1):
     for ext in ext2_ls:
         del_LR_SR_coverage_aa_cmd = "rm " + temp_foldername + "corrected_LR_SR.map" + ext + ".fq &"
         log_command(del_LR_SR_coverage_aa_cmd)

@@ -1,21 +1,12 @@
 #!/usr/bin/python
 
 import sys
-import os
 import datetime
 import string
 import commands
 import threading
 import random
-
-def log_print(print_str):
-    os.system("echo '" + str(print_str) + "'")
-
-def log_command(print_str):
-    os.system("echo " + str(print_str))
-    os.system(str(print_str))
-
-
+from commonLSC import log_command, log_print
 
 ################################################################################
 # Debug flags
@@ -74,8 +65,12 @@ for ext in ext_ls:
     T_ls[i].start()
     i += 1
     nav_filename_list.append(nav_filename + ext + ".sort" )
+i = 0
 for T in T_ls:
     T.join()
+    delSRnav_cmd = "rm " + nav_filename + ext_ls[i]
+    log_command(delSRnav_cmd)
+    i += 1
             
 sort_cmd = "sort -m -T " + temp_foldername
 if (sort_max_mem != "-1"):
@@ -85,9 +80,8 @@ log_command(sort_cmd)
 
 for ext in ext_ls:
     delSRnavsort_cmd = "rm " + nav_filename + ext + ".sort"
-    delSRnav_cmd = "rm " + nav_filename + ext 
     log_command(delSRnavsort_cmd)
-    log_command(delSRnav_cmd)
+    
     
 log_print("Done with sorting")
 

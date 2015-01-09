@@ -4,16 +4,12 @@ import sys
 import os
 import commands
 import string
+from commonLSC import log_command, log_print
 
 ################################################################################
-
-def log_print(print_str):
-    os.system("echo " + str(print_str))
-
 def rm_command(filename):
     if (os.path.isfile(filename)):
-        os.system("rm " + filename)
-
+        log_command("rm " + filename)
         
 ################################################################################
 if len(sys.argv) >= 4:

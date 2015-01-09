@@ -1,9 +1,10 @@
 #!/usr/bin/python
-import os
+
 import sys
 import numpy
 import datetime
 import re
+from commonLSC import log_print
 
 # Probability of correctness
 fq_prob_list = [0.725,
@@ -23,10 +24,6 @@ fq_prob_list = [0.725,
                 0.999999999]
 fq_char_list = [str(unichr(min(int(33 - 10 * numpy.math.log10(1 -p)), 73))) for p in fq_prob_list]
 NUM_FQ_CHAR = len(fq_char_list) - 1
-
-def log_print(print_str):
-    os.system("echo '" + str(print_str) + "'")
-
 
 ################################################################################
 # Separate the path to a file from the filename (filepath -> path,filename)
