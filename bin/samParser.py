@@ -10,8 +10,10 @@ if len(sys.argv) >= 5:
     SR_filename = sys.argv[2]
     sam_filename = sys.argv[3]     #####Important Note: Input sam file is expected to be SR sorted
     nav_filename = sys.argv[4]
-    one_line_per_alignment = (sys.argv[4][0] == "T")  # T: TRUE, F: FALSE
+    err_rate_threshold = int(sys.argv[5])
+    one_line_per_alignment = (sys.argv[6][0] == "T")  # T: TRUE, F: FALSE
 else:
+    print("Generate a novoalign native format file from a sam format file")
     print("usage: python samParser.py LR.fa.cps SR.fa.cps sam_file nav_output_filename")
     print("or ./samParser.py LR.fa.cps SR.fa.cps sam_file nav_output_filename")
     sys.exit(1)
@@ -60,7 +62,7 @@ for line in LR_file:
     
     if (line_num):
         if (line[0] != '>'):
-             continue    # unexpected string
+            continue    # unexpected string
         read_name = (line.strip())[1:]
     else:
         LR_seq[read_name] = line.strip().upper()
@@ -126,6 +128,7 @@ for line in sam_file:
         ref_idx = int(fields[1]) - 1   # convert to 0-offset address
         diff_list = []
         cigar_list = re.split('(M|I|D)', fields[2])
+        num_err = 0
         for idx in range(1, len(cigar_list), 2):
             if (cigar_list[idx - 1].isdigit()):
                 if (cigar_list[idx] == 'M'):
@@ -143,6 +146,7 @@ for line in sam_file:
                     read_idx += subseq_len
                     ref_idx += subseq_len
                     sub_ref_idx += subseq_len
+                    num_err += len(mut_indices)
                 elif (cigar_list[idx] == 'I'):
                     subseq_len = int(cigar_list[idx - 1])
                     if (read_idx + subseq_len > read_seq_len):
@@ -151,7 +155,8 @@ for line in sam_file:
                     insert_str = re.sub(r'N|n', '', read_seq[read_idx:(read_idx + int(cigar_list[idx - 1]))])
                     if (insert_str != ""):
                         diff_list += [str(sub_ref_idx) + '+' + read_seq[read_idx:(read_idx + subseq_len)]]
-                    read_idx += subseq_len           
+                    read_idx += subseq_len
+                    num_err += subseq_len
                 elif (cigar_list[idx] == 'D'):
                     subseq_len = int(cigar_list[idx - 1])
                     if (ref_idx + subseq_len > ref_seq_len):
@@ -161,6 +166,7 @@ for line in sam_file:
                         diff_list += [str(sub_ref_idx + del_idx) + '-' + ref_seq[ref_idx + del_idx]]
                     ref_idx += subseq_len
                     sub_ref_idx += subseq_len
+                    num_err += subseq_len
             else:
                 #print 'Err in cigar: tag : ' + line
                 err_state = True
@@ -168,8 +174,10 @@ for line in sam_file:
         if ((cigar_list[-1] == '') and (not err_state)):
             if (len(diff_list) == 0):
                 diff_list.append("*")
-            nav_file.write('\t'.join([pseudo_SR_name, fields[0], fields[1], ' '.join(diff_list),
-                                      SR_seq, SR_idx_seq]) + '\n')
+            err_rate = (100 * num_err) / read_seq_len
+            if (err_rate <= err_rate_threshold):
+                nav_file.write('\t'.join([pseudo_SR_name, fields[0], fields[1], ' '.join(diff_list),
+                                SR_seq, SR_idx_seq]) + '\n')
 
 sam_file.close()
 nav_file.close()

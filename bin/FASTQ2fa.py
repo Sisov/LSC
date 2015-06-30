@@ -8,6 +8,7 @@ if len(sys.argv)>=3:
     out_filename = sys.argv[2]
 
 else:
+    print("Remove quality information and separate the reads from their names for performance reasons")
     print("usage: ./FASTQ2fa.py input_filename output_filename")
     print("or python FASTQ2fa.py input_filename output_filename")
     sys.exit(1)

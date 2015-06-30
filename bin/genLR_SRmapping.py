@@ -2,22 +2,27 @@
 
 import sys
 import os
-from numpy import *
 import datetime
 import string
 import commands
 import threading
 import random
 
+def log_print(print_str):
+    os.system("echo '" + str(print_str) + "'")
+
+def log_command(print_str):
+    os.system("echo " + str(print_str))
+    os.system(str(print_str))
+
+
+
 ################################################################################
 # Debug flags
 printSCD = False
 
 ################################################################################
-def log_print(print_str):
-    os.system("echo '" + str(print_str) + "'")
 
-################################################################################
 
 if len(sys.argv) >= 2:
     temp_foldername = sys.argv[1]
@@ -50,7 +55,7 @@ if (Nthread_temp < Nthread):
     Nthread = Nthread_temp
     
 split_cmd = "split -l " + str(Nsplitline) + " " + nav_filename + " " + nav_filename  +"."
-os.system(split_cmd)
+log_command(split_cmd)
 
 ## Sorting the files
 ext_ls=[]
@@ -65,7 +70,7 @@ for ext in ext_ls:
     if (sort_max_mem != "-1"):
         sort_cmd += " -S " + str(sort_max_mem) + " "    
     sort_cmd += " -nk 2 "  + nav_filename + ext + " > " + nav_filename + ext + ".sort" 
-    T_ls.append( threading.Thread(target=os.system, args=(sort_cmd,)) )
+    T_ls.append( threading.Thread(target=log_command, args=(sort_cmd,)) )
     T_ls[i].start()
     i += 1
     nav_filename_list.append(nav_filename + ext + ".sort" )
@@ -76,13 +81,13 @@ sort_cmd = "sort -m -T " + temp_foldername
 if (sort_max_mem != "-1"):
     sort_cmd += " -S " + str(sort_max_mem) + " "
 sort_cmd += " -nk 2 "  + " ".join(nav_filename_list) + " > " + nav_filename + ".sort"
-os.system(sort_cmd)
+log_command(sort_cmd)
 
 for ext in ext_ls:
     delSRnavsort_cmd = "rm " + nav_filename + ext + ".sort"
     delSRnav_cmd = "rm " + nav_filename + ext 
-    os.system(delSRnavsort_cmd)
-    os.system(delSRnav_cmd)
+    log_command(delSRnavsort_cmd)
+    log_command(delSRnav_cmd)
     
 log_print("Done with sorting")
 
@@ -235,7 +240,7 @@ if (printSCD):
     LR_uSR_coverage_selected_file.close()
     
 delSRnavsort_cmd = "rm " + nav_filename + ".sort"
-os.system(delSRnavsort_cmd)
+log_command(delSRnavsort_cmd)
 
 log_print("Done with generating LR_SR.map file")
 
