@@ -59,6 +59,7 @@ def main():
   group.add_argument('--specific_tempdir',help="FOLDERNAME of exactly where to place temproary folders")
   parser.add_argument('-o','--output',required=True,help="FOLDERNAME where output is to be written")
   parser.add_argument('--mode',default=0,type=int,help="0: run through")
+  parser.add_argument('--sort_mem_max',type=int,help="-S option for memory in unix sort")
   args = parser.parse_args()
   if args.threads == 0:
     args.threads = cpu_count()
@@ -129,7 +130,7 @@ def main():
     
   if mode == 0 or mode == 1:    
     if I_nonredundant == "N" and SR_filetype != "cps":  # If we go in, we want to get a unique set
-        remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path)
+        remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path,args)
         sys.stderr.write(str(datetime.datetime.now()-t0))
         
   ##########################################
@@ -476,7 +477,7 @@ def main():
 #     temp_foldername is the location of the tempfolder
 # Post: Writes SR_uniq.fa into tempfolder as a 
 
-def remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path):
+def remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path,args):
   sys.stderr.write("=== sort and uniq SR data ===\n")
   if SR_filetype == 'fa':
     gfr = GenericFastaFileReader(SR_pathfilename)
@@ -487,8 +488,10 @@ def remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin
     sys.exit()
   #Launch a pipe to store the unique fasta.  Its a little cumbersome but should
   #minimize memory usage.  Could go back and add the -S to sort if memory is a problem
-  cmd = bin_path+"seq2uniqfasta.pl "+temp_foldername+"SR_uniq.fa "+temp_foldername+" " +bin_path
-  p = subprocess.Popen(cmd.split(),stdin=subprocess.PIPE,bufsize=1)
+  cmd = bin_path+"seq2uniqfasta.py --output "+temp_foldername+"SR_uniq.fa --tempdir "+temp_foldername
+  if args.sort_mem_max:
+    cmd += " --sort_mem "+str(args.sort_mem_max)
+  p = subprocess.Popen(cmd.split(),stdin=subprocess.PIPE)
   while True:
     entry = gfr.read_entry()
     if not entry: break
