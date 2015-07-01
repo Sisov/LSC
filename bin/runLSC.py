@@ -10,7 +10,10 @@ from copy import * # Where is this being used?
 import threading #This should be changed to a Pool later
 import string
 import commands # This is used for running some line counts later and can probably go away when those do.
+from SequenceBasics import GenericFastaFileReader, GenericFastqFileReader
 from multiprocessing import cpu_count
+import subprocess
+from random import randint
 
 def log_print(print_str):
     os.system("echo '" + str(print_str) + "'")
@@ -23,11 +26,9 @@ def log_command(print_str):
 ################################################################################
 
 def GetPathAndName(pathfilename):
-    ls=pathfilename.split('/')
-    filename=ls[-1]
-    path='/'.join(ls[0:-1])+'/'
-    if path == "/":
-        path = "./"
+    full_path = os.path.abspath(pathfilename)
+    [path, filename] = os.path.split(full_path)
+    path += '/'
     return path, filename
 
 def Readcfgfile(cfg_filename):
@@ -53,17 +54,24 @@ def main():
   parser.add_argument('--long_reads',required=True,help="FASTAFILE Long reads to correct")
   parser.add_argument('--short_reads',nargs='+',help="FASTAFILE Short reads used to correct the long reads")
   parser.add_argument('--threads',type=int,default=0,help="Number of threads (Default = cpu_count)")
-  parser.add_argument('--tempdir',default='/tmp',help="FOLDERNAME where temporary files can be placed")
+  group = parser.add_mutually_exclusive_group()
+  group.add_argument('--tempdir',default='/tmp',help="FOLDERNAME where temporary files can be placed")
+  group.add_argument('--specific_tempdir',help="FOLDERNAME of exactly where to place temproary folders")
+  parser.add_argument('-o','--output',required=True,help="FOLDERNAME where output is to be written")
+  parser.add_argument('--mode',default=0,type=int,help="0: run through")
   args = parser.parse_args()
   if args.threads == 0:
     args.threads = cpu_count()
 
+  run_pathfilename = os.path.realpath(__file__)
+
   # Establish running parameters here.  Some of these may need to become command line options.
   python_path = "/usr/bin/python"
-  mode = 0
-  LR_pathfilename = ''
-  SR_pathfilename = ''
-  SR_filetype = ''
+  mode = args.mode
+  LR_pathfilename = args.long_reads
+  SR_pathfilename = args.short_reads[0]
+  SR_filetype = 'fa'
+  LR_filetype = 'fa'
   temp_foldername = 'temp'
   output_foldername = 'output'
   I_RemoveBothTails = "N"
@@ -79,23 +87,31 @@ def main():
   sys.stderr.write("=== Welcome to LSC " + version + " ===\n")
   
   ################################################################################
+  # Make the temporary directory to work in
+  # and output directory
+  temp_foldername = args.tempdir.rstrip('/') + '/'
+  if args.specific_tempdir:
+    temp_foldername = args.specific_tempdir.rstrip('/')+'/'
+  else:
+    # We need to make a very temporary directory
+    rname = "lsc."+str(randint(1,1000000000))
+    if not os.path.isdir(temp_foldername+rname):
+      os.makedirs(temp_foldername+rname)
+      temp_foldername+=rname+'/'
+  output_foldername = args.output.rstrip('/')+'/'
 
-  if temp_foldername[-1]!='/':
-      temp_foldername=temp_foldername+'/'
-  if output_foldername[-1]!='/':
-      output_foldername=output_foldername+'/'
+  if not os.path.isdir(output_foldername):
+    os.makedirs(output_foldername)
 
-  if (not os.path.isdir(output_foldername)):
-      log_command('mkdir ' + output_foldername)
-  if (not os.path.isdir(temp_foldername)):
-      if (mode == 2):
-          log_print("Error: temp folder does not exist.")
-          log_print("Note: You need to run LSC in mode 1 or 0 before running in mode 2.")
-          exit(1)
-      log_command('mkdir ' + temp_foldername)
-  if (not os.path.isdir(temp_foldername + "log")):
-      log_command('mkdir ' + temp_foldername + "log")
-
+  if not os.path.isdir(temp_foldername):
+    if mode == 2:
+      sys.stderr.write("Error: temp folder does not exist.\n")
+      sys.stderr.write("Note: You need to run LSC in mode 1 or 0 before running in mode 2.\n")
+      sys.exit()
+    else: 
+      os.makedirs(temp_foldername)
+  if not os.path.isdir(temp_foldername + "log"):
+    os.makedirs(temp_foldername+"log")
 
   bin_path, run_filename = GetPathAndName(run_pathfilename)
   LR_path, LR_filename = GetPathAndName(LR_pathfilename)
@@ -105,56 +121,16 @@ def main():
 
   t0 = datetime.datetime.now()
 
-  ################################################################################
-  if (len(sys.argv) > 2):
-      if (sys.argv[2] == "-clean_up"):
-          cleanup_cmd = python_bin_path + "clean_up.py " + temp_foldername + " " + str(args.threads) + " " + str(args.threads)
-          log_command(cleanup_cmd)
-      else:
-          log_print("")
-          log_print("Error: Invalid option " + sys.argv[2])
-      exit(0)    
+  # LSC does have an option for a 'clean_up' step with clean_up.py but I don't recall it being documented 
+  # note that clean_up.py took as inputs the temp folder, and the two cpu_counts
         
   ################################################################################
   # Remove duplicate short reads first
-  if(SR_filetype == "fa"):
-      SR_NL_per_seq = 2
-  elif(SR_filetype == "fq"):
-      SR_NL_per_seq = 4
-  elif(SR_filetype == "cps"):
-      SR_NL_per_seq = -1
-  else:
-      log_print("Err: invalid filetype for short reads")
-      exit(1)
     
-  if ((mode == 0) or 
-      (mode == 1)):
-    
-    if ((I_nonredundant == "N") and
-        (SR_filetype != "cps")):
-        log_print("=== sort and uniq SR data ===")
-        
-        fa2seq_cmd = "awk '{if(NR%" + str(SR_NL_per_seq) + "==" + str(2 % SR_NL_per_seq) + ")print $0}' " + SR_pathfilename + " > " + temp_foldername + "SR.seq"
-        log_command (fa2seq_cmd)
-    
-        sort_cmd = "sort -T " + temp_foldername 
-        if (sort_max_mem != "-1"):
-            sort_cmd += " -S " + str(sort_max_mem)+ " "    
-        sort_cmd += " " + temp_foldername + "SR.seq > " + temp_foldername + "SR_sorted.seq"
-        log_command(sort_cmd)
-    
-        uniq_cmd = "uniq -c " + temp_foldername + "SR_sorted.seq > " + temp_foldername + "SR_uniq.seq"
-        log_command(uniq_cmd)
-    
-        uniqseq2fasta_cmd = python_bin_path + "uniqseq2fasta.py " + temp_foldername + "SR_uniq.seq > " + temp_foldername + "SR_uniq.fa"
-        log_command(uniqseq2fasta_cmd)
-    
-        log_print(str(datetime.datetime.now()-t0))
-        SR_pathfilename = temp_foldername + "SR_uniq.fa"
-        rm_cmd = "rm " + temp_foldername + "SR_uniq.seq " + temp_foldername + "SR_sorted.seq " + temp_foldername + "SR.seq"
-        log_command(rm_cmd)
-
-        SR_filetype = "fa"
+  if mode == 0 or mode == 1:    
+    if I_nonredundant == "N" and SR_filetype != "cps":  # If we go in, we want to get a unique set
+        remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path)
+        sys.stderr.write(str(datetime.datetime.now()-t0))
         
   ##########################################
   # Split the SR FASTQ across CPUs
@@ -393,7 +369,7 @@ def main():
   log_print("===genLR_SRmapping SR.??.cps.nav:===")    
     
   genLR_SRmapping_cmd = python_bin_path + "genLR_SRmapping.py "  + temp_foldername + " " +  temp_foldername + SR_filename + ".cps.nav " + temp_foldername + LR_filename 
-  genLR_SRmapping_cmd += " " + str(SCD) + " " + str(Nthread2) + " " + str(sort_max_mem) 
+  genLR_SRmapping_cmd += " " + str(SCD) + " " + str(args.threads) + " " + str(sort_max_mem) 
   log_command(genLR_SRmapping_cmd)
   log_print(str(datetime.datetime.now()-t0))
 
@@ -406,16 +382,16 @@ def main():
     log_print("Error: No short reads was aligned to long read. LSC could not correct any long read sequence.")
     exit(1)
     
-  Nsplitline = 1 + (LR_SR_map_NR/Nthread2)
+  Nsplitline = 1 + (LR_SR_map_NR/args.threads)
 
   Nthread2_temp = int(LR_SR_map_NR)/int(Nsplitline)
   if ((LR_SR_map_NR % Nsplitline) != 0):
     Nthread2_temp += 1
-  if (Nthread2_temp < Nthread2):
-    Nthread2 = Nthread2_temp
+  if (Nthread2_temp < args.threads):
+    args.threads = Nthread2_temp
 
   ext2_ls=[]
-  for i in range(Nthread2):
+  for i in range(args.threads):
     ext2_ls.append( '.' + string.lowercase[i / 26] + string.lowercase[i % 26] )
     
   splitLR_SR_map_cmd = "split -l " + str(Nsplitline) + " " + temp_foldername + "LR_SR.map" + ' ' + temp_foldername + "LR_SR.map" +"."
@@ -495,6 +471,32 @@ def main():
     log_command("mv " + temp_foldername + "LR_SR.map_emtry_ls" + ext + " " + temp_foldername + "log")
   ####################
 
+# Pre: Requires the SR_filetype as fa or fq
+#     SR_pathfilename as the loction of the SR file
+#     temp_foldername is the location of the tempfolder
+# Post: Writes SR_uniq.fa into tempfolder as a 
+
+def remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path):
+  sys.stderr.write("=== sort and uniq SR data ===\n")
+  if SR_filetype == 'fa':
+    gfr = GenericFastaFileReader(SR_pathfilename)
+  elif SR_filetype == 'fq':
+    gfr = GenericFastqFileReader(SR_pathfilename)
+  else:
+    sys.stderr.write("ERROR: invalid SR_filetype "+SR_filetype+"\n")
+    sys.exit()
+  #Launch a pipe to store the unique fasta.  Its a little cumbersome but should
+  #minimize memory usage.  Could go back and add the -S to sort if memory is a problem
+  cmd = bin_path+"seq2uniqfasta.pl "+temp_foldername+"SR_uniq.fa "+temp_foldername+" " +bin_path
+  p = subprocess.Popen(cmd.split(),stdin=subprocess.PIPE,bufsize=1)
+  while True:
+    entry = gfr.read_entry()
+    if not entry: break
+    seq = entry['seq'].upper()
+    p.stdin.write(seq+"\n")
+  p.communicate()
+  SR_pathfilename = temp_foldername + "SR_uniq.fa"
+  return SR_pathfilename
 
 if __name__=="__main__":
   main()
