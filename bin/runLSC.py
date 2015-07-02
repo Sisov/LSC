@@ -3,6 +3,7 @@
 import argparse
 import sys
 import os
+import json
 from numpy import * # Where is this being used?
 import datetime
 from re import * # Where is this being used?
@@ -11,9 +12,10 @@ import threading #This should be changed to a Pool later
 import string
 import commands # This is used for running some line counts later and can probably go away when those do.
 from SequenceBasics import GenericFastaFileReader, GenericFastqFileReader
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, Pool
 import subprocess
 from random import randint
+from SequenceCompressionBasics import HomopolymerCompressionFactory
 
 def log_print(print_str):
     os.system("echo '" + str(print_str) + "'")
@@ -60,6 +62,8 @@ def main():
   parser.add_argument('-o','--output',required=True,help="FOLDERNAME where output is to be written")
   parser.add_argument('--mode',default=0,type=int,help="0: run through")
   parser.add_argument('--sort_mem_max',type=int,help="-S option for memory in unix sort")
+  parser.add_argument('--minNumberofNonN',type=int,default=40,help="Minimum number of non-N characters in the compressed read")
+  parser.add_argument('--maxN',type=int,help="Maximum number of Ns in the compressed read")
   args = parser.parse_args()
   if args.threads == 0:
     args.threads = cpu_count()
@@ -75,12 +79,9 @@ def main():
   LR_filetype = 'fa'
   temp_foldername = 'temp'
   output_foldername = 'output'
-  I_RemoveBothTails = "N"
-  MinNumberofNonN = "40"
-  MaxN = "1"
   I_nonredundant = "N"
   SCD = 20
-  sort_max_mem = "-1"
+  sort_max_mem = -1
   clean_up = 0
   max_error_rate = "12"
   bowtie2_options = "--end-to-end -a -f -L 15 --mp 1,1 --np 1 --rdg 0,1 --rfg 0,1 --score-min L,0,-0.08 --no-unal --omit-sec-seq"
@@ -126,166 +127,59 @@ def main():
   # note that clean_up.py took as inputs the temp folder, and the two cpu_counts
         
   ################################################################################
-  # Remove duplicate short reads first
-    
+  # Remove duplicate short reads first  
   if mode == 0 or mode == 1:    
     if I_nonredundant == "N" and SR_filetype != "cps":  # If we go in, we want to get a unique set
         remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path,args)
-        sys.stderr.write(str(datetime.datetime.now()-t0))
+        sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
+        
+  ############################################################################
+  # Run compression over short reads
+  if mode == 0 or mode == 1 and SR_filetype != "cps":
+    sys.stderr.write("===compress SR:===\n")    
+    # At this point we should have uniq fasta formatted reads
+    # We may want to consider supportin a unique set of fastq reads also
+    global SR_cps_fh
+    global SR_idx_fh
+    SR_cps_fh = open(temp_foldername+'SR.fa.cps','w')
+    SR_idx_fh = open(temp_foldername+'SR.fa.idx','w')
+    compress_SR(temp_foldername+'SR_uniq.fa',args)
+    SR_cps_fh.close()
+    SR_idx_fh.close()
+    sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
         
   ##########################################
-  # Split the SR FASTQ across CPUs
-  ext_ls=[]
-  for i in range(args.threads):
-    ext_ls.append( '.' + string.lowercase[i / 26] + string.lowercase[i % 26] )
-
-  if ((mode == 0) or 
-    (mode == 1)):
-    
-        log_print("===split SR:===")    
-        if (SR_filetype == "cps"):
-            SR_NL = int(commands.getstatusoutput('wc -l ' + SR_pathfilename)[1].split()[0])
-            Nsplitline = 1 + (SR_NL / args.threads)
-            if (Nsplitline % 2 == 1):
-                Nsplitline +=1
-                    
-            splitSR_cmd = "split -l " + str(Nsplitline) + " " + SR_pathfilename + " " + temp_foldername + "SR.fa."
-            log_command(splitSR_cmd)
-            for ext in ext_ls:
-                mv_cmd = "mv " + temp_foldername + "SR.fa" + ext + " "  + temp_foldername + "SR.fa" + ext + ".cps"
-                log_command(mv_cmd)
-            splitSR_cmd = "split -l " + str(Nsplitline/2) + " " + SR_path + "SR.fa.idx " + temp_foldername + "SR.fa."
-            log_command(splitSR_cmd)
-            for ext in ext_ls:
-                mv_cmd = "mv " + temp_foldername + "SR.fa" + ext + " "  + temp_foldername + "SR.fa" + ext + ".idx"
-                log_command(mv_cmd)
-                            
-            log_print(str(datetime.datetime.now()-t0))
-        else:
-            SR_NL = int(commands.getstatusoutput('wc -l ' + SR_pathfilename)[1].split()[0])
-            Nsplitline = 1 + (SR_NL / args.threads)
-            if ( SR_filetype == "fa"):
-                if (Nsplitline % 2 == 1):
-                    Nsplitline +=1
-            elif ( SR_filetype == "fq"):
-                if (Nsplitline % 4 != 0):
-                    Nsplitline += (4 - (Nsplitline % 4))
-            else:
-                log_print("Err: invalid filetype for short reads")
-                exit(1)
-            
-            splitSR_cmd = "split -l " + str(Nsplitline) + " " + SR_pathfilename + " " + temp_foldername + "SR.fa."
-            log_command(splitSR_cmd)
-                        
-            log_print(str(datetime.datetime.now()-t0))
-
-  SR_filename = "SR.fa"
-  if (SR_filetype == "cps"):
-    SR_cps_pathfilename = SR_path +  "SR.fa"
-  else:
-    SR_cps_pathfilename = temp_foldername + "SR.fa"
-
-  ##########################################
-  # Run HC over the split SR input
-  if ((mode == 0) or 
-    (mode == 1)):
-
-    if (SR_filetype != "cps"):
-        log_print("===compress SR.??:===")    
-        
-        i = 0
-        T_compress_SR_ls = []
-        for ext in ext_ls:
-            compress_SR_cmd = python_bin_path + "compress.py -MinNonN=" + MinNumberofNonN + " -MaxN=" + MaxN + " " + SR_filetype + " " + temp_foldername + SR_filename + ext + " " + temp_foldername + SR_filename + ext + "."
-            T_compress_SR_ls.append( threading.Thread(target=log_command, args=(compress_SR_cmd,)) )
-            T_compress_SR_ls[i].start()
-            i += 1
-        for T in T_compress_SR_ls:
-            T.join()
-        
-        log_print(str(datetime.datetime.now()-t0))
-        ####################
-        # Remove temporary SR split files
-        for ext in ext_ls:
-            delSR_cmd = "rm " + temp_foldername + SR_filename + ext + " &"
-            log_command(delSR_cmd)
-        ####################
-
-  ##########################################change output from compress.py and poolchr.py 
-  # Remove the tails (shorter bits) from the LR, which SHOULD also be the overlapping DNA compliment
-  if ((mode == 0) or 
-    (mode == 1)):
-
-    if I_RemoveBothTails == "Y":   
-        log_print("===RemoveBothTails in LR:===")    
-        RemoveBothTails_cmd = python_bin_path + "RemoveBothTails.py " + LR_filetype + " " + LR_pathfilename + " " + temp_foldername + "Notwotails_" + LR_filename 
-        log_command(RemoveBothTails_cmd)
-        LR_filetype = "fa"
-        log_print(str(datetime.datetime.now()-t0))
-
-    if I_RemoveBothTails == "Y":
-        LR2fa_cmd = python_bin_path + "FASTA2fa.py " + temp_foldername + "Notwotails_" + LR_filename + " " + temp_foldername + "LR.fa"
-        deltempLR_cmd = "rm " + temp_foldername + "Notwotails_" + LR_filename  
-    else:
-        if (LR_filetype == "fa"):
-            LR2fa_cmd = python_bin_path + "FASTA2fa.py " + LR_pathfilename + " " + temp_foldername + "LR.fa"
-        else:
-            LR2fa_cmd = python_bin_path + "FASTQ2fa.py " + LR_pathfilename + " " + temp_foldername + "LR.fa"
-            
-    log_print(LR2fa_cmd)
-    log_command(LR2fa_cmd)
-    if I_RemoveBothTails == "Y":
-        log_print(deltempLR_cmd)
-        log_command(deltempLR_cmd)
+  # Change the names of the long read files and save the names
+  # Previously at this step LSC had an option to remove fragments of long reads
+  # That were usually the start and ending tails
+  # That step is for pacbio reads and could be done without short reads, 
+  # and thus seems to fall out of the scope of the purpose of LSC
+  if mode == 0 or mode == 1:
+    sys.stderr.write("===rename LR:===\n")    
+    gfr = GenericFastaFileReader(args.long_reads)
+    of_lr = open(temp_foldername+'LR.fa','w')
+    of_lr_readnames = open(temp_foldername+'LR.fa.readnames','w')
+    z = 0
+    while True:
+      entry = gfr.read_entry()
+      if not entry: break
+      z += 1
+      of_lr.write(">"+entry['name']+"\n"+entry['seq'].upper()+"\n")
+      of_lr_readnames.write(str(z)+"\t"+entry['name'])
+    of_lr.close()
+    of_lr_readnames.close()
+    sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
 
   LR_filename = "LR.fa"
 
   ##########################################
   # Compress the long reads
   # Build the aligner index and then align short to long 
-  if ((mode == 0) or 
-    (mode == 1)):
-
-    log_print(str(datetime.datetime.now()-t0))   
-    
-    log_print("===compress LR:===")    
-    compress_LR_cmd = python_bin_path + "compress.py -MinNonN=" + MinNumberofNonN + " -MaxN=10000" + " fa " + temp_foldername + LR_filename + " " + temp_foldername + LR_filename +"."
-    log_print(compress_LR_cmd)
-    log_command(compress_LR_cmd)
-
-    ####################
-    LR_NL = int(commands.getstatusoutput('wc -l ' + temp_foldername + "LR.fa.cps")[1].split()[0])
-    LR_NR = LR_NL / 2
-    ####################
-    delLR_cmd = "rm " + temp_foldername + "LR.fa"
-    log_print(delLR_cmd)
-    log_command(delLR_cmd)
-    ####################
-
-    log_print(str(datetime.datetime.now()-t0))
-
-    # For now we can restrict ourselves to bowtie2.  hisat and bwa-mem are probably more likely to be used when this becomes modular
-    log_print("===bowtie2 index LR:===")    
-    bowtie2_index_cmd = "bowtie2-build -f " + temp_foldername + LR_filename + ".cps " + temp_foldername + LR_filename + ".cps"
-    log_command(bowtie2_index_cmd)
-        
-    log_print(str(datetime.datetime.now()-t0))
-        
-        
-    ##########################################
-    log_print("===bowtie2 SR.??.cps:===")    
-        
-    i=0
-    T_bowtie2_ls=[]
-    for ext in ext_ls:
-        bowtie2_cmd = "bowtie2 " + bowtie2_options + " -x " + temp_foldername + LR_filename + ".cps -U " + temp_foldername + SR_filename + ext + ".cps -S " + temp_foldername + SR_filename + ext + ".cps.sam" 
-        T_bowtie2_ls.append( threading.Thread(target=log_command, args=(bowtie2_cmd,)) )
-        T_bowtie2_ls[i].start()
-        i+=1
-    for T in T_bowtie2_ls:
-        T.join()
-    
-    log_print(str(datetime.datetime.now()-t0))
+  # This is the step where parallelization aught to come in to play
+  # so I am ending mode 1 at this step.
+  if mode == 0 or mode == 2:
+    sys.stderr.write("===compress LR:===\n")    
+    total_batches = execute_LR(temp_foldername+'LR.fa',args,temp_foldername)
 
     ##########################################
     # Convert the SAM file to a NAV file
@@ -306,41 +200,6 @@ def main():
 
     log_print(str(datetime.datetime.now()-t0))
     
-  ##########################################
-  # Build complete CPS and IDX files
-    if (SR_filetype != "cps"):
-        log_print("===cat SR.??.cps:===")    
-        temp_filename_ls = []
-        for ext in ext_ls:
-            temp_filename_ls.append( temp_foldername + SR_filename + ext + ".cps" )
-        log_command( "cat " + ' '.join(temp_filename_ls) + " > " + temp_foldername + SR_filename + ".cps" )
-        log_print(str(datetime.datetime.now()-t0))
-        ####################
-        log_print("===cat SR.??.idx:===")    
-        temp_filename_ls = []
-        for ext in ext_ls:
-            temp_filename_ls.append( temp_foldername + SR_filename + ext + ".idx" )
-        log_command( "cat " + ' '.join(temp_filename_ls) + " > " + temp_foldername + SR_filename + ".idx" )
-        log_print(str(datetime.datetime.now()-t0))
-        ####################
-
-    # Build complete SAM and NAV files
-    ####################
-    log_print("===cat SR.??.cps.sam :===")    
-    temp_filename_ls = []
-    for ext in ext_ls:
-        temp_filename_ls.append( temp_foldername + SR_filename + ext + ".cps.sam" )
-    log_command( "cat " + ' '.join(temp_filename_ls) + " > " + temp_foldername + SR_filename + ".cps.sam" )
-    log_print(str(datetime.datetime.now()-t0))
-    ####################
-    log_print("===cat SR.??.cps.nav :===")    
-    temp_filename_ls = []
-    for ext in ext_ls:
-        temp_filename_ls.append( temp_foldername + SR_filename + ext + ".cps.nav" )
-    log_command( "cat " + ' '.join(temp_filename_ls) + " > " + temp_foldername + SR_filename + ".cps.nav" )
-    log_print(str(datetime.datetime.now()-t0))
-    ####################    
-
     ####################
     # Remove sam, alignment summary (.nav, .map) files per thread
     if (clean_up == 1):
@@ -500,6 +359,100 @@ def remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin
   p.communicate()
   SR_pathfilename = temp_foldername + "SR_uniq.fa"
   return SR_pathfilename
+
+def compress_SR(short_read_file,args):
+  gfr = GenericFastaFileReader(short_read_file)
+  batchsize = 100000
+  batch = []
+  cpus = args.threads
+  p = Pool(processes=cpus)
+  while True:
+    entry = gfr.read_entry()
+    if not entry: break
+    batch.append([entry['name'],entry['seq']])
+    if len(batch) >= batchsize: # we have enough to process
+      p.apply_async(compress_batch,args=(json.dumps(batch),args.minNumberofNonN,args.maxN,),callback=collect_results)
+      #results = compress_batch(batch)
+      batch = []
+  if len(batch) >= 0:
+    p.apply_async(compress_batch,args=(json.dumps(batch),args.minNumberofNonN,args.maxN,),callback=collect_results)
+    #results = compress_batch(batch)
+  p.close()
+  p.join()
+  gfr.close()
+
+def collect_results(results):
+  global SR_cps_fh
+  global SR_idx_fh    
+  for entry in results:
+    SR_cps_fh.write(">"+entry[0]+"\n"+entry[1]+"\n")
+    SR_idx_fh.write(entry[0]+"\t"+entry[2]+"\t"+entry[3]+"\n")
+  return
+
+def compress_batch(seq_batch_json,minNumberofNonN,maxN):
+  seq_batch = json.loads(seq_batch_json)
+  result = []
+  hpcf = HomopolymerCompressionFactory()
+  if minNumberofNonN: hpcf.set_MinNonN(minNumberofNonN)
+  if maxN: hpcf.set_MaxN(maxN)
+  for entry in seq_batch:
+    res = hpcf.compress(entry[1])
+    if not res: continue
+    (cps, pos_ls, len_ls) = res
+    result.append([entry[0],cps,pos_ls,len_ls])
+  return result
+
+def execute_LR(lr_filename,args,temp_foldername):
+  gfr = GenericFastaFileReader(lr_filename)
+  batchsize = 10000
+  batch = []
+  batch_number = 0
+  while True:
+    entry = gfr.read_entry()
+    if not entry: break
+    batch.append([entry['name'],entry['seq']])
+    if len(batch) >= batchsize:
+      batch_number += 1
+      sys.stderr.write("... executing batch "+str(batch_number)+"\r")
+      execute_batch(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads)
+      batch = []
+  if len(batch) > 0:
+    batch_number += 1
+    sys.stderr.write("... executing batch "+str(batch_number)+"\r")
+    execute_batch(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads)
+  sys.stderr.write("\n")
+  return batch_number
+
+def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads):
+  batch = json.loads(batch_json)
+  #step 1 compression
+  hpcf = HomopolymerCompressionFactory()
+  if minNumberofNonN: hpcf.set_MinNonN(minNumberofNonN)
+  if maxN: hpcf.set_MaxN(maxN)
+  of_cps = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps','w')
+  of_idx = open(temp_foldername+"LR.fa."+str(batch_number)+'.idx','w')
+  for entry in batch:
+    res = hpcf.compress(entry[1])
+    if not res: continue
+    (cps, pos_ls, len_ls) = res
+    of_cps.write(">"+entry[0]+"\n"+cps+"\n")
+    of_idx.write(entry[0]+"\t"+pos_ls+"\t"+len_ls+"\n")
+  of_cps.close()
+  of_idx.close()
+  #step 2 build an index
+  of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log','w')
+  cmd1 = 'hisat-build '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index'
+  subprocess.call(cmd1.split(),stderr=of_log,stdout=of_log)
+  #step 3 map short reads
+  cmd2 = 'hisat -f -p '+str(threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps -S '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam'
+  subprocess.call(cmd2.split(),stderr=of_log,stdout=of_log)
+  #step 4 convert sam to nav
+  #cmd3 = python_bin_path + "samParser.py " + temp_foldername + LR_filename + ".cps " + temp_foldername + SR_filename + ext + " " + 
+  #                       temp_foldername + SR_filename + ext + ".cps.sam " + temp_foldername + SR_filename + ext + ".cps.nav " + max_error_rate + " ") 
+  #      samParser_cmd += " T " 
+  #      samParser_cmd += " > " + temp_foldername + SR_filename + ext + ".cps.samParser.log"
+  
+  of_log.close()
 
 if __name__=="__main__":
   main()
