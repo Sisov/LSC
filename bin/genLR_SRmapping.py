@@ -31,12 +31,15 @@ if len(sys.argv) >= 2:
     SR_cvrg_threshold = int(sys.argv[4])
     Nthread = int(sys.argv[5])
     sort_max_mem = sys.argv[6]
-    
+    LR_readnames = sys.argv[7]
+    output_filename = sys.argv[8]
     
 else:
     log_print("usage: python convertNAV.py temp_foldername LR_filename nav_filename Nthread sort_max_mem")
     log_print("or ./convertNAV.py temp_foldername LR_filename nav_filename Nthread sort_max_mem")
     sys.exit(1)
+
+if sort_max_mem == 'None': sort_max_mem = "-1"
 
 ################################################################################
 # Splitting the nav file
@@ -107,7 +110,7 @@ for line in LR_idx_file:
     LR_idx_dict[fields[0]] = '\t'.join(fields[1:])
 LR_idx_file.close()
 
-LR_name_file = open(LR_filename +'.readname','r')
+LR_name_file = open(LR_readnames,'r')
 LR_name_dict={}
 for line in LR_name_file:
     fields=line.strip().split('\t')
@@ -116,7 +119,7 @@ LR_name_file.close()
 
 nav_file=open(nav_filename + ".sort" ,'r')
 nav_cvrg_file=open(nav_filename + ".sort" ,'r')   # This used to compute coverage
-LR_SR_mapping_file = open(temp_foldername + "LR_SR.map",'w')
+LR_SR_mapping_file = open(output_filename,'w')
 if (printSCD):
     LR_SR_coverage_file = open(temp_foldername + "LR_SR.scd",'w')
     LR_uSR_coverage_file = open(temp_foldername + "LR_SR.uscd",'w')

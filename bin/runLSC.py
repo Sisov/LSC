@@ -4,7 +4,7 @@ import argparse
 import sys
 import os
 import json
-from numpy import * # Where is this being used?
+#from numpy import * # Where is this being used?
 import datetime
 from re import * # Where is this being used?
 from copy import * # Where is this being used?
@@ -16,6 +16,7 @@ from multiprocessing import cpu_count, Pool
 import subprocess
 from random import randint
 from SequenceCompressionBasics import HomopolymerCompressionFactory
+from SamToNavBasics import SamToNavFactory
 
 def log_print(print_str):
     os.system("echo '" + str(print_str) + "'")
@@ -64,6 +65,8 @@ def main():
   parser.add_argument('--sort_mem_max',type=int,help="-S option for memory in unix sort")
   parser.add_argument('--minNumberofNonN',type=int,default=40,help="Minimum number of non-N characters in the compressed read")
   parser.add_argument('--maxN',type=int,help="Maximum number of Ns in the compressed read")
+  parser.add_argument('--error_rate_threshold',type=int,default=12,help="Maximum percent of errors in a read to use the alignment")
+  parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
   args = parser.parse_args()
   if args.threads == 0:
     args.threads = cpu_count()
@@ -80,10 +83,8 @@ def main():
   temp_foldername = 'temp'
   output_foldername = 'output'
   I_nonredundant = "N"
-  SCD = 20
   sort_max_mem = -1
   clean_up = 0
-  max_error_rate = "12"
   bowtie2_options = "--end-to-end -a -f -L 15 --mp 1,1 --np 1 --rdg 0,1 --rfg 0,1 --score-min L,0,-0.08 --no-unal --omit-sec-seq"
 
   sys.stderr.write("=== Welcome to LSC " + version + " ===\n")
@@ -165,7 +166,7 @@ def main():
       if not entry: break
       z += 1
       of_lr.write(">"+entry['name']+"\n"+entry['seq'].upper()+"\n")
-      of_lr_readnames.write(str(z)+"\t"+entry['name'])
+      of_lr_readnames.write(str(z)+"\t"+entry['name']+"\n")
     of_lr.close()
     of_lr_readnames.close()
     sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
@@ -178,86 +179,8 @@ def main():
   # This is the step where parallelization aught to come in to play
   # so I am ending mode 1 at this step.
   if mode == 0 or mode == 2:
-    sys.stderr.write("===compress LR:===\n")    
+    sys.stderr.write("===compress LR, samParser LR.??.cps.nav:===\n")    
     total_batches = execute_LR(temp_foldername+'LR.fa',args,temp_foldername)
-
-    ##########################################
-    # Convert the SAM file to a NAV file
-    log_print("===samParser SR.??.cps.nav:===")
-    
-    i=0
-    T_samParser_ls=[]
-    for ext in ext_ls:
-        samParser_cmd = (python_bin_path + "samParser.py " + temp_foldername + LR_filename + ".cps " + temp_foldername + SR_filename + ext + " " + 
-                         temp_foldername + SR_filename + ext + ".cps.sam " + temp_foldername + SR_filename + ext + ".cps.nav " + max_error_rate + " ") 
-        samParser_cmd += " T " 
-        samParser_cmd += " > " + temp_foldername + SR_filename + ext + ".cps.samParser.log"
-        T_samParser_ls.append( threading.Thread(target=log_command, args=(samParser_cmd,)) )
-        T_samParser_ls[i].start()
-        i+=1
-    for T in T_samParser_ls:
-        T.join()
-
-    log_print(str(datetime.datetime.now()-t0))
-    
-    ####################
-    # Remove sam, alignment summary (.nav, .map) files per thread
-    if (clean_up == 1):
-        for ext in ext_ls:
-            delSRnav_cmd = "rm " + temp_foldername + SR_filename + ext + ".cps.nav &"
-            delSRsam_cmd = "rm " + temp_foldername + SR_filename + ext + ".cps.sam &"
-            delSRidx_aa_cmd = "rm " + temp_foldername + SR_filename + ext + ".idx &"
-            delSRcps_aa_cmd = "rm " + temp_foldername + SR_filename + ext + ".cps &"
-            log_command(delSRcps_aa_cmd)
-            log_command(delSRidx_aa_cmd)
-            log_command(delSRnav_cmd)
-            log_command(delSRsam_cmd)
-            
-    ####################
-    for ext in ext_ls:
-        log_command("mv " + temp_foldername + "SR.fa" + ext + ".cps.samParser.log " + temp_foldername + "log")
-    ####################
-
-  ####################
-
-  # Return after alignment in case of mode 1
-  if (mode == 1):
-    exit(0)
-
-
-  ##########################################
-  log_print("===genLR_SRmapping SR.??.cps.nav:===")    
-    
-  genLR_SRmapping_cmd = python_bin_path + "genLR_SRmapping.py "  + temp_foldername + " " +  temp_foldername + SR_filename + ".cps.nav " + temp_foldername + LR_filename 
-  genLR_SRmapping_cmd += " " + str(SCD) + " " + str(args.threads) + " " + str(sort_max_mem) 
-  log_command(genLR_SRmapping_cmd)
-  log_print(str(datetime.datetime.now()-t0))
-
-  ##########################################
-  log_print("===split LR_SR.map:===")    
-
-  LR_SR_map_NR = int(commands.getstatusoutput('wc -l ' + temp_foldername +"LR_SR.map")[1].split()[0])
-
-  if (LR_SR_map_NR == 0):
-    log_print("Error: No short reads was aligned to long read. LSC could not correct any long read sequence.")
-    exit(1)
-    
-  Nsplitline = 1 + (LR_SR_map_NR/args.threads)
-
-  Nthread2_temp = int(LR_SR_map_NR)/int(Nsplitline)
-  if ((LR_SR_map_NR % Nsplitline) != 0):
-    Nthread2_temp += 1
-  if (Nthread2_temp < args.threads):
-    args.threads = Nthread2_temp
-
-  ext2_ls=[]
-  for i in range(args.threads):
-    ext2_ls.append( '.' + string.lowercase[i / 26] + string.lowercase[i % 26] )
-    
-  splitLR_SR_map_cmd = "split -l " + str(Nsplitline) + " " + temp_foldername + "LR_SR.map" + ' ' + temp_foldername + "LR_SR.map" +"."
-  log_command(splitLR_SR_map_cmd)
-
-  log_print(str(datetime.datetime.now()-t0))
 
   ##########################################
   log_print("===correct.py LR_SR.map.??_tmp :===")    
@@ -413,19 +336,18 @@ def execute_LR(lr_filename,args,temp_foldername):
     batch.append([entry['name'],entry['seq']])
     if len(batch) >= batchsize:
       batch_number += 1
-      sys.stderr.write("... executing batch "+str(batch_number)+"\r")
-      execute_batch(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads)
+      execute_batch(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
       batch = []
   if len(batch) > 0:
     batch_number += 1
-    sys.stderr.write("... executing batch "+str(batch_number)+"\r")
-    execute_batch(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads)
+    execute_batch(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
   sys.stderr.write("\n")
   return batch_number
 
-def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads):
+def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem):
   batch = json.loads(batch_json)
   #step 1 compression
+  sys.stderr.write("... executing batch "+str(batch_number)+".1\r")
   hpcf = HomopolymerCompressionFactory()
   if minNumberofNonN: hpcf.set_MinNonN(minNumberofNonN)
   if maxN: hpcf.set_MaxN(maxN)
@@ -440,18 +362,36 @@ def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,t
   of_cps.close()
   of_idx.close()
   #step 2 build an index
+  sys.stderr.write("... executing batch "+str(batch_number)+".2\r")
   of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log','w')
   cmd1 = 'hisat-build '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index'
   subprocess.call(cmd1.split(),stderr=of_log,stdout=of_log)
   #step 3 map short reads
-  cmd2 = 'hisat -f -p '+str(threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps -S '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam'
+  sys.stderr.write("... executing batch "+str(batch_number)+".3\r")
+  cmd2 = 'hisat --reorder -f -p '+str(threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps -S '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam'
   subprocess.call(cmd2.split(),stderr=of_log,stdout=of_log)
   #step 4 convert sam to nav
-  #cmd3 = python_bin_path + "samParser.py " + temp_foldername + LR_filename + ".cps " + temp_foldername + SR_filename + ext + " " + 
-  #                       temp_foldername + SR_filename + ext + ".cps.sam " + temp_foldername + SR_filename + ext + ".cps.nav " + max_error_rate + " ") 
-  #      samParser_cmd += " T " 
-  #      samParser_cmd += " > " + temp_foldername + SR_filename + ext + ".cps.samParser.log"
-  
+  sys.stderr.write("... executing batch "+str(batch_number)+".4\r")
+  of = open(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.nav','w')
+  stnf = SamToNavFactory()
+  stnf.set_error_rate_threshold(error_rate_threshold)
+  stnf.initialize_compressed_query(temp_foldername+'SR.fa.cps',temp_foldername+'SR.fa.idx')
+  stnf.initialize_target(temp_foldername+'LR.fa.'+str(batch_number)+'.cps')
+  with open(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam') as inf:
+    for line in inf:
+      navs = stnf.sam_to_nav(line)
+      if not navs: continue
+      for oline in navs:
+        of.write(oline+"\n")
+  stnf.close()
+  of.close()
+
+  #step 5 nav to mapping
+  python_bin_path = "python ../LSC/bin/"
+  genLR_SRmapping_cmd = python_bin_path + "genLR_SRmapping.py "  + temp_foldername + " " +  temp_foldername + "LR.fa."+str(batch_number)+".cps.nav " + temp_foldername + 'LR.fa.'+str(batch_number)
+  genLR_SRmapping_cmd += " " + str(short_read_coverage_threshold) + " " + str(threads) + " " + str(sort_max_mem) +" "
+  genLR_SRmapping_cmd += temp_foldername+"LR.fa.readnames "+temp_foldername+"LR_SR.map."+str(batch_number)
+  print genLR_SRmapping_cmd  
   of_log.close()
 
 if __name__=="__main__":

@@ -1,24 +1,7 @@
-#!/usr/bin/python
+import sys, os, re, numpy
+from SequenceBasics import GenericFastaFileReader
 
-import sys
-import os
-import re
-import numpy
-
-if len(sys.argv) >= 5:
-    LR_filename = sys.argv[1]
-    SR_filename = sys.argv[2]
-    sam_filename = sys.argv[3]     #####Important Note: Input sam file is expected to be SR sorted
-    nav_filename = sys.argv[4]
-    err_rate_threshold = int(sys.argv[5])
-    one_line_per_alignment = (sys.argv[6][0] == "T")  # T: TRUE, F: FALSE
-else:
-    print("Generate a novoalign native format file from a sam format file")
-    print("usage: python samParser.py LR.fa.cps SR.fa.cps sam_file nav_output_filename")
-    print("or ./samParser.py LR.fa.cps SR.fa.cps sam_file nav_output_filename")
-    sys.exit(1)
-
-################################################################################
+#Generate a novoalign native format file from a sam format file
 
 rev_cmplmnt_map = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N': 'N', 
                    'a': 't', 'c': 'g', 'g': 'c', 't': 'a', 'n': 'n'}
@@ -54,44 +37,60 @@ def get_SR_sequence(SR_file, SR_idx_file, SR_seq_readname):
             exit(1) 
         SR_idx_seq = '\t'.join(SR_idx_seq[1:])
     return [SR_seq, SR_idx_seq]
-    
-LR_file = open(LR_filename,'r')
-LR_seq = {}
-line_num = 1
-for line in LR_file:
-    
-    if (line_num):
-        if (line[0] != '>'):
-            continue    # unexpected string
-        read_name = (line.strip())[1:]
-    else:
-        LR_seq[read_name] = line.strip().upper()
-    line_num = 1 - line_num
-LR_file.close()
 
-SR_file = open(SR_filename + ".cps",'r')
-SR_idx_file = open(SR_filename + ".idx",'r')
-sam_file = open(sam_filename, 'r')
-nav_file = open(nav_filename, 'w')
+class SamToNavFactory:
+  #SR_file (query) and SR_idx_file must go in the same order as 
+  #the sam file.
+  def __init__(self):
+    self.error_rate_threshold = 100
+    self.one_line_per_alignment = False # BWA will put them all on one line
+    self.current_query = "invalid read name"
+    return
 
-SR_seq_readname = "invalid_read_name"
-SR_seq = ""
-SR_seq_rvs_cmplmnt = ""
-for line in sam_file:
+  def set_error_rate_threshold(self,error_rate_threshold):
+    self.error_rate_threshold = error_rate_threshold
+    return
+
+  def set_one_line_per_alginment(self,one_line_per_alignment):
+    self.one_line_per_alignment = one_line_per_alignment
+    return
+
+  def initialize_compressed_query(self,SR_filename,SR_idx_filename):
+    self.SR_file = open(SR_filename)
+    self.SR_idx_file = open(SR_idx_filename)
+    return
+
+  def initialize_target(self,LR_filename):
+    gfr = GenericFastaFileReader(LR_filename)
+    self.LR_seq = {}
+    while True:
+      entry = gfr.read_entry()
+      if not entry: break
+      self.LR_seq[entry['name']] = entry['seq']
+    gfr.close()
+    return self.LR_seq
+
+  def sam_to_nav(self,line):
+    SR_seq = ""
+    SR_seq_rvs_cmplmnt = ""
+    if not self.LR_seq:
+      sys.stderr.write("ERROR initialize target first\n")
+    if not self.SR_file:
+      sys.stderr.write("ERROR initialize query first\n")
     
     if (line[0] == '@'):
-        continue
+        return None
     
     line_fields = line.strip().split('\t')
     cigar = line_fields[5]
     if ((cigar == '*') or (cigar == '.')):
-        continue
+        return None
     
     SR_name = line_fields[0]
-    if (SR_name != SR_seq_readname):
-        [SR_seq, SR_idx_seq] = get_SR_sequence(SR_file, SR_idx_file, SR_name)
+    if (SR_name != self.current_query):
+        [SR_seq, SR_idx_seq] = get_SR_sequence(self.SR_file, self.SR_idx_file, SR_name)
         SR_seq_rvs_cmplmnt = reverse_complement(SR_seq)
-        SR_seq_readname = SR_name
+        self.current_query = SR_name
     
     if (int(line_fields[1]) & 0x10):     # Check if seq is reversed complement
         line_fields[3] = '-' + line_fields[3]
@@ -100,7 +99,7 @@ for line in sam_file:
     
     align_list = [','.join([line_fields[2], line_fields[3], line_fields[5], str(0)])]
     
-    if (not one_line_per_alignment):   # BWA reports all alignment per read in one line
+    if (not self.one_line_per_alignment):   # BWA reports all alignment per read in one line
         multi_align_str = ','.join([line_fields[2], line_fields[3], line_fields[5], str(0)]) + ';'
         for fields_idx in range(11, len(line_fields)):
             if (line_fields[fields_idx][0:5] == 'XA:Z:'):
@@ -110,11 +109,12 @@ for line in sam_file:
         
 
     read_seq_len = len(SR_seq)
+    ostrings = []
     for align_str in align_list:
         err_state = False
         fields = align_str.split(',')
         
-        ref_seq = LR_seq[fields[0]]
+        ref_seq = self.LR_seq[fields[0]]
         ref_seq_len = len(ref_seq)
         if (fields[1][0] == '-'):     # Check if seq is reversed complement
             read_seq = SR_seq_rvs_cmplmnt
@@ -175,11 +175,10 @@ for line in sam_file:
             if (len(diff_list) == 0):
                 diff_list.append("*")
             err_rate = (100 * num_err) / read_seq_len
-            if (err_rate <= err_rate_threshold):
-                nav_file.write('\t'.join([pseudo_SR_name, fields[0], fields[1], ' '.join(diff_list),
-                                SR_seq, SR_idx_seq]) + '\n')
-
-sam_file.close()
-nav_file.close()
-SR_file.close()
-SR_idx_file.close()
+            if (err_rate <= self.error_rate_threshold):
+                ostrings.append('\t'.join([pseudo_SR_name, fields[0], fields[1], ' '.join(diff_list),SR_seq, SR_idx_seq]))
+    if len(ostrings) == 0: return None
+    return ostrings
+  def close(self):
+    self.SR_file.close()
+    self.SR_idx_file.close()
