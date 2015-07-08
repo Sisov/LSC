@@ -128,6 +128,7 @@ def Convertord(SR_idx_seq_list):
 if len(sys.argv) >= 2:
     LR_SR_mapping_filename = sys.argv[1]
     LR_readname_filename = sys.argv[2]
+    output_prefix = sys.argv[3]
 else:
     log_print("usage :./correct_nonredundant.py LR_SR.map.aa_tmp LR.fa.readname")
     log_print("usage : python correct_nonredundant.py LR_SR.map.aa_tmp LR.fa.readname")
@@ -151,10 +152,10 @@ for line in readname_file:
 path,filename = GetPathAndName(LR_SR_mapping_filename)
 
 tmp = open(LR_SR_mapping_filename,'r')
-full_read_file=open(path + 'full_'+ filename,'w')
-corrected_read_file=open(path + 'corrected_'+ filename,'w')
-corrected_read_fq_file=open(path + 'corrected_'+ filename +'.fq','w')
-uncorrected_read_file = open(path + 'uncorrected_'+ filename,'w')
+full_read_file=open(output_prefix+'_full','w')
+corrected_read_file=open(output_prefix+ '_corrected','w')
+corrected_read_fq_file=open(output_prefix+'_corrected_fq','w')
+uncorrected_read_file = open(output_prefix+'_uncorrected','w')
 
 zerostr="0"
 onestr="1"
