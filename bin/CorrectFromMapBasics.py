@@ -1,7 +1,6 @@
 #!/usr/bin/python
 import os
 import sys
-import numpy
 import re
 from math import log
 
@@ -202,7 +201,7 @@ class CorrectFromMapFactory:
     else:
         p_ls=[]
 
-    crt_pt_ls.update(set(numpy.array(p_ls,dtype='int')))
+    crt_pt_ls.update(set([int(x) for x in p_ls]))
     crt_pt_ls.update(set(range(a-50,a) ))
 #########################################################################################################
     end_pt_ls = []
@@ -359,14 +358,11 @@ class CorrectFromMapFactory:
                 del SR_idx_seq_list[pt:pt+L]
         SR_del_seq = ''.join(SR_del_seq_list)
 ###############
-
-        (I_ls,) = numpy.nonzero(numpy.array(SR_idx_seq_list,dtype='int')>1)
-        I_ls = len_space + I_ls 
+        I_ls = [x+len_space for x in range(len(SR_idx_seq_list)) if int(SR_idx_seq_list[x]) > 1]
         crt_pt_ls.update(set(I_ls))
-
 #############DISPLAY#######################################
         # Add everything we can learn from this SR into the master correction list
-        crt_pt_ls.update( set(numpy.array(list(insert_pt_set),dtype='int')+len_space-1) )
+        crt_pt_ls.update( set([int(x)+len_space-1 for x in insert_pt_set]))
         SR_idx_seq  = Convertord(SR_idx_seq_list)
         SR_seq = ''.join(SR_seq_list)
 
@@ -375,15 +371,15 @@ class CorrectFromMapFactory:
         temp_SR_idx_seq = self.zerostr*(len_space-start_pt) + SR_idx_seq
         temp_SR_del_seq = self.zerostr*(len_space-start_pt) + SR_del_seq
 
-        temp = numpy.copy(SR_seq_list)
+        temp = SR_seq_list[:]
         SR_seq_list = [self.zerostr]*(len_space-start_pt)
         SR_seq_list.extend(temp)
 
-        temp = numpy.copy(SR_idx_seq_list)
+        temp = SR_idx_seq_list[:]
         SR_idx_seq_list =[self.zerostr]*(len_space-start_pt)
         SR_idx_seq_list.extend(temp)
 
-        temp = numpy.copy(SR_del_seq_list)
+        temp = SR_del_seq_list[:]
         SR_del_seq_list =[self.zerostr]*(len_space-start_pt)
         SR_del_seq_list.extend(temp)
 
@@ -404,11 +400,17 @@ class CorrectFromMapFactory:
 #########################################################################################################
 
     # Sort the correction points based on position
-    crt_pt_sorted_array = numpy.array(numpy.sort(list(crt_pt_ls)))
+    crt_pt_sorted_array = sorted(list(crt_pt_ls))
+    #crt_pt_sorted_array = numpy.array(numpy.sort(list(crt_pt_ls)))
 
-    temp_index_ls = numpy.searchsorted(crt_pt_sorted_array,[start_pt,end_pt])
-    crt_repos_ls = crt_pt_sorted_array[temp_index_ls[0]:temp_index_ls[1]] - start_pt
-
+    
+    #temp_index_ls = numpy.searchsorted(crt_pt_sorted_array,[start_pt,end_pt])
+    temp_index_ls_spread =  [x for x in range(len(crt_pt_sorted_array)) if crt_pt_sorted_array[x] >= start_pt and crt_pt_sorted_array[x] < end_pt]
+    if len(temp_index_ls_spread) == 0:
+      temp_index_ls = [0,0]
+    else:
+      temp_index_ls = [temp_index_ls_spread[0],temp_index_ls_spread[len(temp_index_ls_spread)-1]+1] #get the first and last elements, but add one to the last element.
+    crt_repos_ls = [x - start_pt for x in crt_pt_sorted_array[temp_index_ls[0]:temp_index_ls[1]]]
     temp_LR_seq_list = list(temp_LR_seq)
     i = 0
     # Compute coverage information for the long read
@@ -446,9 +448,20 @@ class CorrectFromMapFactory:
 
 #########################################################################################################
 
-    del_pt_sorted_array = numpy.array(numpy.sort(list(del_pt_set)))
-    temp_del_index_ls = numpy.searchsorted(del_pt_sorted_array,[start_pt-1,end_pt])
-    del_repos_ls = del_pt_sorted_array[temp_del_index_ls[0]:temp_index_ls[1]] - start_pt -2
+    #del_pt_sorted_array = numpy.array(numpy.sort(list(del_pt_set)))
+    #temp_del_index_ls = numpy.searchsorted(del_pt_sorted_array,[start_pt-1,end_pt])
+    #del_repos_ls = del_pt_sorted_array[temp_del_index_ls[0]:temp_index_ls[1]] - start_pt -2
+
+    del_pt_sorted_array = sorted(list(del_pt_set))
+    temp_del_index_ls_spread =  [x for x in range(len(del_pt_sorted_array)) if del_pt_sorted_array[x] >= start_pt-1 and del_pt_sorted_array[x] < end_pt]
+    if len(temp_del_index_ls_spread)==0:
+      temp_del_index_ls = [0,0]
+    else: 
+      temp_del_index_ls = [temp_del_index_ls_spread[0],temp_del_index_ls_spread[len(temp_del_index_ls_spread)-1]+1] #get the first and last elements, but add one to the last element.
+    ##### is this a bug here? it seems the points we slice between aren't correct
+    # I am leaving it as it was. It doesn't look like it changes much on how the code executes.
+    del_repos_ls = [x - start_pt -2 for x in del_pt_sorted_array[temp_del_index_ls[0]:temp_index_ls[1]]]
+    #del_repos_ls = [x - start_pt -2 for x in del_pt_sorted_array[temp_del_index_ls[0]:temp_del_index_ls[1]]]
 
     Npredel=0
     # Make the corrections (-)
