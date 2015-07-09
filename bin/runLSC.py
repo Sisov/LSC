@@ -8,7 +8,7 @@ from shutil import copyfile
 from SequenceBasics import GenericFastaFileReader, GenericFastqFileReader
 from SequenceCompressionBasics import HomopolymerCompressionFactory
 from SamToNavBasics import SamToNavFactory
-
+from NavToMapBasics import NavToMapFactory
 
 def main():
   # Run modes for runLSC.py are
@@ -401,16 +401,19 @@ def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,t
     of_idx.write(entry[0]+"\t"+pos_ls+"\t"+len_ls+"\n")
   of_cps.close()
   of_idx.close()
+
   #step 2 build an index
   sys.stderr.write("... executing batch "+str(batch_number)+".2 (index)      \r")
   of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log','w')
   cmd1 = 'hisat-build '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index'
   subprocess.call(cmd1.split(),stderr=of_log,stdout=of_log)
+
   #step 3 map short reads
   sys.stderr.write("... executing batch "+str(batch_number)+".3 (alignment)   \r")
   threads = 1
   cmd2 = 'hisat --reorder -f -p '+str(threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps -S '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam'
   subprocess.call(cmd2.split(),stderr=of_log,stdout=of_log)
+
   #step 4 convert sam to nav
   sys.stderr.write("... executing batch "+str(batch_number)+".4 (sam to nav)   \r")
   of = open(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.nav','w')
@@ -426,17 +429,40 @@ def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,t
         of.write(oline+"\n")
   stnf.close()
   of.close()
+  
+  #step 5 sort nav by long read name
+  sys.stderr.write("...executing batch "+str(batch_number)+".5 (sort nav)    \r")
+  sort_cmd =  "sort -T "+temp_foldername+" "
+  if sort_max_mem:
+    sort_cmd += "-S "+str(sort_max_mem)+" "
+  sort_cmd += "-nk 2 " + temp_foldername+ "LR.fa."+str(batch_number)+".cps.nav "
+  sort_cmd += "-o "+temp_foldername+"LR.fa."+str(batch_number)+".cps.nav.sort"
+  subprocess.call(sort_cmd.split(),stderr=of_log,stdout=of_log)  
 
-  #step 5 nav to mapping
-  sys.stderr.write("... executing batch "+str(batch_number)+".5 (nav to map)   \r")
+  #step 6 nav to mapping
+  sys.stderr.write("... executing batch "+str(batch_number)+".6 (nav to map)   \r")
+  #genLR_SRmapping_cmd = python_bin_path + "genLR_SRmapping.py "  + temp_foldername + " " +  temp_foldername + "LR.fa."+str(batch_number)+".cps.nav.sort " + temp_foldername + 'LR.fa.'+str(batch_number)
+  #genLR_SRmapping_cmd += " " + str(short_read_coverage_threshold) + " " + str(sort_max_mem) +" "
+  #genLR_SRmapping_cmd += temp_foldername+"LR.fa.readnames "+temp_foldername+"LR_SR.map."+str(batch_number)
+  #sys.stderr.write("\n"+genLR_SRmapping_cmd+"\n")
+  #subprocess.call(genLR_SRmapping_cmd.split(),stderr=of_log,stdout=of_log)
+
+  ntmf = NavToMapFactory(temp_foldername+"LR.fa."+str(batch_number)+".cps.nav.sort", \
+         temp_foldername+"LR.fa."+str(batch_number)+".cps", \
+         temp_foldername+"LR.fa."+str(batch_number)+".idx", \
+         temp_foldername+"LR.fa.readnames", \
+         short_read_coverage_threshold)
+  of_map = open(temp_foldername+"LR_SR.map."+str(batch_number),'w')
+  while True:
+    entry = ntmf.read_entry()
+    if not entry: break
+    of_map.write(entry+"\n")
+  ntmf.close()
+  of_map.close()
+
+  #step 7 correct
   python_bin_path = "python ../LSC/bin/"
-  genLR_SRmapping_cmd = python_bin_path + "genLR_SRmapping.py "  + temp_foldername + " " +  temp_foldername + "LR.fa."+str(batch_number)+".cps.nav " + temp_foldername + 'LR.fa.'+str(batch_number)
-  genLR_SRmapping_cmd += " " + str(short_read_coverage_threshold) + " " + str(threads) + " " + str(sort_max_mem) +" "
-  genLR_SRmapping_cmd += temp_foldername+"LR.fa.readnames "+temp_foldername+"LR_SR.map."+str(batch_number)
-  subprocess.call(genLR_SRmapping_cmd.split(),stderr=of_log,stdout=of_log)
-
-  #step 6 correct
-  sys.stderr.write("... executing batch "+str(batch_number)+".6 (correcting)   \r")
+  sys.stderr.write("... executing batch "+str(batch_number)+".7 (correcting)   \r")
   correct_for_piece_cmd = python_bin_path + "correct_nonredundant.py " + temp_foldername + "LR_SR.map." + str(batch_number)  + " " + temp_foldername + 'LR.fa.readnames '+temp_foldername+'output.'+str(batch_number)+'.file'
   subprocess.call(correct_for_piece_cmd.split(),stderr=of_log,stdout=of_log)
   of_log.close()
