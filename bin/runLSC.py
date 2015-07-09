@@ -9,6 +9,7 @@ from SequenceBasics import GenericFastaFileReader, GenericFastqFileReader
 from SequenceCompressionBasics import HomopolymerCompressionFactory
 from SamToNavBasics import SamToNavFactory
 from NavToMapBasics import NavToMapFactory
+from CorrectFromMapBasics import CorrectFromMapFactory
 
 def main():
   # Run modes for runLSC.py are
@@ -165,7 +166,7 @@ def main():
     if args.parallelized_mode_2 > 0 and args.parallelized_mode_2 <= total_batches:
       sys.stderr.write("===Parallelized mode:===\nWill begin work on batch #"+str(args.parallelized_mode_2)+"\n")
     else:
-      sys.stderr.write("ERROR invalid batch number for parallized_mode_2\n")
+      sys.stderr.write("ERROR invalid batch number for parallelized_mode_2\n")
       sys.exit()
 
   ##########################################
@@ -379,7 +380,7 @@ def execute_LR(lr_filename,args,temp_foldername,batchsize):
       p.apply_async(execute_batch,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
   sys.stderr.write("\n")
   #If we are running jobs as pools we clean up those threads here.
-  if args.threads > 1 and not args.parallized_mode_2:
+  if args.threads > 1 and not args.parallelized_mode_2:
     p.close()
     p.join()
   return batch_number
@@ -441,12 +442,6 @@ def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,t
 
   #step 6 nav to mapping
   sys.stderr.write("... executing batch "+str(batch_number)+".6 (nav to map)   \r")
-  #genLR_SRmapping_cmd = python_bin_path + "genLR_SRmapping.py "  + temp_foldername + " " +  temp_foldername + "LR.fa."+str(batch_number)+".cps.nav.sort " + temp_foldername + 'LR.fa.'+str(batch_number)
-  #genLR_SRmapping_cmd += " " + str(short_read_coverage_threshold) + " " + str(sort_max_mem) +" "
-  #genLR_SRmapping_cmd += temp_foldername+"LR.fa.readnames "+temp_foldername+"LR_SR.map."+str(batch_number)
-  #sys.stderr.write("\n"+genLR_SRmapping_cmd+"\n")
-  #subprocess.call(genLR_SRmapping_cmd.split(),stderr=of_log,stdout=of_log)
-
   ntmf = NavToMapFactory(temp_foldername+"LR.fa."+str(batch_number)+".cps.nav.sort", \
          temp_foldername+"LR.fa."+str(batch_number)+".cps", \
          temp_foldername+"LR.fa."+str(batch_number)+".idx", \
@@ -461,10 +456,25 @@ def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,t
   of_map.close()
 
   #step 7 correct
-  python_bin_path = "python ../LSC/bin/"
   sys.stderr.write("... executing batch "+str(batch_number)+".7 (correcting)   \r")
-  correct_for_piece_cmd = python_bin_path + "correct_nonredundant.py " + temp_foldername + "LR_SR.map." + str(batch_number)  + " " + temp_foldername + 'LR.fa.readnames '+temp_foldername+'output.'+str(batch_number)+'.file'
-  subprocess.call(correct_for_piece_cmd.split(),stderr=of_log,stdout=of_log)
+  output_prefix = temp_foldername+"output."+str(batch_number)+".file"
+  full_read_file=open(output_prefix+'_full','w')
+  corrected_read_file=open(output_prefix+ '_corrected','w')
+  corrected_read_fq_file=open(output_prefix+'_corrected_fq','w')
+  uncorrected_read_file = open(output_prefix+'_uncorrected','w')
+  cfmf = CorrectFromMapFactory(temp_foldername+"LR.fa.readnames")
+  with open(temp_foldername+"LR_SR.map."+str(batch_number)) as inf:
+    for line in inf:
+      output = cfmf.correct_map_line(line)
+      if not output: continue
+      uncorrected_read_file.write(output['uncorrected_fasta'])
+      corrected_read_file.write(output['corrected_fasta'])
+      corrected_read_fq_file.write(output['corrected_fastq'])
+      full_read_file.write(output['full_fasta'])
+  corrected_read_file.close()
+  corrected_read_fq_file.close()
+  uncorrected_read_file.close()
+  full_read_file.close()
   of_log.close()
 
 if __name__=="__main__":
