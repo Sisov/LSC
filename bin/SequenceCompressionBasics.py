@@ -1,8 +1,3 @@
-#!/usr/bin/python
-
-import sys
-import os
-
 class HomopolymerCompressionFactory:
   def __init__(self):
     self.MinNonN=None

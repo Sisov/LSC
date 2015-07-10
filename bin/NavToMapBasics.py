@@ -1,8 +1,3 @@
-#!/usr/bin/python
-
-import sys
-import subprocess
-import datetime
 import random
 from SequenceBasics import GenericFastaFileReader
 

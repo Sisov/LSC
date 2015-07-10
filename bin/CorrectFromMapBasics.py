@@ -1,7 +1,4 @@
-#!/usr/bin/python
-import os
-import sys
-import re
+import sys, re
 from math import log
 
 # Probability of correctness
@@ -22,9 +19,6 @@ fq_prob_list = [0.725,
                 0.999999999]
 fq_char_list = [str(unichr(min(int(33 - 10 * log(1 -p,10)), 73))) for p in fq_prob_list]
 NUM_FQ_CHAR = len(fq_char_list) - 1
-
-def log_print(print_str):
-    os.system("echo '" + str(print_str) + "'")
 
 
 ################################################################################
@@ -123,16 +117,6 @@ def Convertord(SR_idx_seq_list):
         result = result + chr(int(s)+48)
     return result
 
-################################################################################
-if len(sys.argv) >= 2:
-    LR_SR_mapping_filename = sys.argv[1]
-    LR_readname_filename = sys.argv[2]
-    output_prefix = sys.argv[3]
-else:
-    log_print("usage :./correct_nonredundant.py LR_SR.map.aa_tmp LR.fa.readname")
-    log_print("usage : python correct_nonredundant.py LR_SR.map.aa_tmp LR.fa.readname")
-    sys.exit(1)
-
 class CorrectFromMapFactory:
   def __init__(self,LR_readname_filename):
     self.LR_read_name_list = [""]
@@ -172,7 +156,7 @@ class CorrectFromMapFactory:
     read_int = int(read_name[0:])
     
     if tmp_ls[2] == '':
-        log_print(read_name + "\tno alignment")
+        sys.stderr.write(read_name + "\tno alignment\n")
         return None
 
     ls_SR_seq = tmp_ls[4].split('kinfai')
@@ -248,7 +232,7 @@ class CorrectFromMapFactory:
                     L_insert = len(mismatch_seq_ls[2*j+1])
                     L += L_insert
                     if L_insert>1:
-                        log_print("warning inert >2 bp")
+                        sys.stderr.write("warning inert >2 bp\n")
 
                     insert_pt_set.add(mismatch_pos_ls[j])
                     indel_pt_set.add(mismatch_pos_ls[j])
@@ -271,8 +255,8 @@ class CorrectFromMapFactory:
 
 ########################################################################################################
     if start_pt_ls == []:
-        log_print(read_name)
-        log_print("no alignments, empty")
+        sys.stderr.write(read_name+"\n")
+        sys.stderr.write("no alignments, empty\n")
 
         return None
 
@@ -409,7 +393,7 @@ class CorrectFromMapFactory:
     if len(temp_index_ls_spread) == 0:
       temp_index_ls = [0,0]
     else:
-      temp_index_ls = [temp_index_ls_spread[0],temp_index_ls_spread[len(temp_index_ls_spread)-1]+1] #get the first and last elements, but add one to the last element.
+      temp_index_ls = [temp_index_ls_spread[0],temp_index_ls_spread[-1]+1] #get the first and last elements, but add one to the last element.
     crt_repos_ls = [x - start_pt for x in crt_pt_sorted_array[temp_index_ls[0]:temp_index_ls[1]]]
     temp_LR_seq_list = list(temp_LR_seq)
     i = 0
@@ -457,7 +441,7 @@ class CorrectFromMapFactory:
     if len(temp_del_index_ls_spread)==0:
       temp_del_index_ls = [0,0]
     else: 
-      temp_del_index_ls = [temp_del_index_ls_spread[0],temp_del_index_ls_spread[len(temp_del_index_ls_spread)-1]+1] #get the first and last elements, but add one to the last element.
+      temp_del_index_ls = [temp_del_index_ls_spread[0],temp_del_index_ls_spread[-1]+1] #get the first and last elements, but add one to the last element.
     ##### is this a bug here? it seems the points we slice between aren't correct
     # I am leaving it as it was. It doesn't look like it changes much on how the code executes.
     del_repos_ls = [x - start_pt -2 for x in del_pt_sorted_array[temp_del_index_ls[0]:temp_index_ls[1]]]

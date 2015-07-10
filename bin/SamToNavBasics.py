@@ -1,4 +1,4 @@
-import sys, os, re, numpy
+import sys, re
 from SequenceBasics import GenericFastaFileReader
 
 #Generate a novoalign native format file from a sam format file
@@ -137,9 +137,9 @@ class SamToNavFactory:
                          (ref_idx + subseq_len > ref_seq_len)):
                         err_state = True
                         break
-                    read_subseq = numpy.array(list(read_seq[read_idx:(read_idx + subseq_len)]))
-                    ref_subseq = numpy.array(list(ref_seq[ref_idx:(ref_idx + subseq_len)]))
-                    mut_indices = numpy.where((ref_subseq == read_subseq) == False)[0].tolist()
+                    read_subseq = list(read_seq[read_idx:(read_idx + subseq_len)])
+                    ref_subseq = list(ref_seq[ref_idx:(ref_idx + subseq_len)])
+                    mut_indices = [x for x in range(len(read_subseq)) if read_subseq[x] != ref_subseq[x]]
                     for mut_idx in mut_indices:
                         if (read_subseq[mut_idx] != "N"):
                             diff_list += [str(sub_ref_idx + mut_idx) + ref_subseq[mut_idx] + '>' + read_subseq[mut_idx]]
