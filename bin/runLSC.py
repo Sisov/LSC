@@ -4,7 +4,7 @@ import argparse, sys, os, json, subprocess
 import datetime
 from multiprocessing import cpu_count, Pool
 from random import randint
-from shutil import copyfile
+from shutil import copyfile, move
 from SequenceBasics import GenericFastaFileReader, GenericFastqFileReader
 from SequenceCompressionBasics import HomopolymerCompressionFactory
 from SamToNavBasics import SamToNavFactory
@@ -35,7 +35,7 @@ def main():
   parser.add_argument('--maxN',type=int,help="Maximum number of Ns in the compressed read")
   parser.add_argument('--error_rate_threshold',type=int,default=12,help="Maximum percent of errors in a read to use the alignment")
   parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
-  parser.add_argument('--long_read_batch_size',type=int,default=500,help="INT number of long reads to work on at a time")
+  parser.add_argument('--long_read_batch_size',type=int,default=5000,help="INT number of long reads to work on at a time")
   args = parser.parse_args()
   if args.threads == 0:
     args.threads = cpu_count()
@@ -49,6 +49,9 @@ def main():
     mode = 2
   elif args.mode:
     mode = args.mode
+  if (mode == 1 or mode == 2) and not args.specific_tempdir:
+    sys.stderr.write("ERROR: if you want to run mode 1 or 2, you will need to define a specific temporary directory to store intermediate files with --specific_tempdir FOLDERNAME\n")
+    sys.exit()
   LR_pathfilename = args.long_reads
   SR_pathfilename = args.short_reads[0]
   SR_filetype = 'fa'
@@ -147,14 +150,22 @@ def main():
 
   ######################################################################
   # Find the total number of batches we will run (regardless of run type)
-  if mode == 0 or mode == 1 or mode == 2 and not args.parallelized_mode_2:
+  if (mode == 0 or mode == 1 or mode == 2) and not args.parallelized_mode_2:
     sys.stderr.write("===batch count:===\n")    
-    total_batches = batch_count_LR(temp_foldername+'LR.fa',args.long_read_batch_size)
+    total_batches = batch_count_LR(temp_foldername+'LR.fa.readnames',args.long_read_batch_size)
     of_batch = open(temp_foldername+'batch_count','w')
     of_batch.write(str(total_batches)+"\n")
     of_batch.close()
     sys.stderr.write("Work will begin on "+str(total_batches)+" batches.\n")
     sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
+  elif mode == 3:
+    total_batches = 0
+    with open(temp_foldername+"batch_count") as inf:
+      read_batches = int(inf.readline().rstrip())
+      if not read_batches:
+        sys.stderr.write("ERROR. problem reading batch count\n")
+        sys.exit()
+      total_batches = read_batches
   elif args.parallelized_mode_2:
     total_batches = 0
     with open(temp_foldername+"batch_count") as inf:
@@ -168,19 +179,41 @@ def main():
     else:
       sys.stderr.write("ERROR invalid batch number for parallelized_mode_2\n")
       sys.exit()
+  sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
 
   ##########################################
   # Compress the long reads
-  # Build the aligner index and then align short to long 
-  # Make the maps
-  # Make the corrections
+  # Build the aligner index 
   # This is the step where parallelization aught to come in to play
   # so I am ending mode 1 at this step.
   if mode == 0 or mode == 2:
     sys.stderr.write("===compress LR, samParser LR.??.cps.nav:===\n")    
-    execute_LR(temp_foldername+'LR.fa',args,temp_foldername,args.long_read_batch_size)
+    execute_pre_alignment(temp_foldername+'LR.fa',args,temp_foldername,args.long_read_batch_size)
     sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
 
+  ###############################################
+  # Add in a step here for aligning the reads batch by batch
+  # one at a time since disk reads on the files seem to come at a premium
+  #step 3 map short reads
+  if mode == 0 or mode == 2:
+    for batch_number in range(1,total_batches+1):
+      if not args.parallelized_mode_2 or args.parallelized_mode_2 == batch_number:
+        of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log2','w')
+        sys.stderr.write("... step 3 aligning "+str(batch_number)+"/"+str(total_batches)+"   \r")
+        cmd2 = 'hisat --end-to-end --no-spliced-alignment --no-unal --omit-sec-seq -a --reorder -f -p '+str(args.threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps -S '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam'
+        subprocess.call(cmd2.split(),stderr=of_log,stdout=of_log)
+        of_log.close()
+    sys.stderr.write("\n")
+
+  ###############################################
+  # Add in a step here for returning to the per batch run
+  # Make the maps
+  # Make the corrections
+  if mode == 0 or mode == 2:
+    sys.stderr.write("===compress LR, samParser LR.??.cps.nav:===\n")    
+    execute_LR(args,temp_foldername,total_batches)
+    sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
+  
   ##########################################
   # Combine the batch outputs into final outputs
   if mode == 0 or mode == 3:
@@ -318,15 +351,14 @@ def batch_count_LR(lr_filename,batchsize):
   gfr = GenericFastaFileReader(lr_filename)
   batch_current = 0
   batch_number = 0
-  while True:
-    entry = gfr.read_entry()
-    if not entry: break
-    batch_current += 1
-    if batch_current >= batchsize:
+  with open(lr_filename) as inf:
+    for line in inf:
+      batch_current += 1
+      if batch_current >= batchsize:
+        batch_number += 1
+        batch_current = 0
+    if batch_current > 0:
       batch_number += 1
-      batch_current = 0
-  if batch_current > 0:
-    batch_number += 1
   return batch_number
 
 # This function launches our jobs (mode 2), and decides at which level (if any) to parallelize the job based on mode and thread counts.
@@ -348,7 +380,25 @@ def batch_count_LR(lr_filename,batchsize):
 #   If you're using a single computer to run a parallelized_mode_2 job where you going to execute one of 
 #     the sets from the batches, it will use the number of threads you specify within that batch to speed processing
 #   The steps it runs through are better defined in execute_batch 
-def execute_LR(lr_filename,args,temp_foldername,batchsize):
+def execute_LR(args,temp_foldername,total_batches):
+  if args.threads > 1 and not args.parallelized_mode_2: 
+    p = Pool(processes=args.threads)
+  for batch_number in range(1,total_batches+1):
+    # We will not use Pool if we are only using one thread or we are doing parallelized mode
+    if (not args.parallelized_mode_2 and args.threads <= 1) or args.parallelized_mode_2 == batch_number:
+      execute_batch(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
+    # We will launch by Pool if we are only running on one system.
+    # In this case we only give each pool job one processor
+    elif not args.parallelized_mode_2:
+      p.apply_async(execute_batch,args=(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
+  #If we are running jobs as pools we clean up those threads here.
+  if args.threads > 1 and not args.parallelized_mode_2:
+    p.close()
+    p.join()
+  sys.stderr.write("\n")
+  return
+
+def execute_pre_alignment(lr_filename,args,temp_foldername,batchsize):
   gfr = GenericFastaFileReader(lr_filename)
   batch = []
   batch_number = 0
@@ -362,58 +412,42 @@ def execute_LR(lr_filename,args,temp_foldername,batchsize):
       batch_number += 1
       # We will not use Pool if we are only using one thread or we are doing parallelized mode
       if (not args.parallelized_mode_2 and args.threads <= 1) or args.parallelized_mode_2 == batch_number:
-        execute_batch(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
+        execute_batch_pre_alignment(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
       # We will launch by Pool if we are only running on one system.
       # In this case we only give each pool job one processor
       elif not args.parallelized_mode_2:
-        p.apply_async(execute_batch,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
+        p.apply_async(execute_batch_pre_alignment,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
       batch = []
   #Handle the case were a buffered sequence(s) still needs run.
   if len(batch) > 0:
     batch_number += 1
     # We will not use Pool if we are only using one thread or we are doing parallelized mode
     if (not args.parallelized_mode_2 and args.threads <= 1) or args.parallelized_mode_2 == batch_number:
-      execute_batch(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
+      execute_batch_pre_alignment(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
     # We will launch by Pool if we are only running on one system.
     # In this case we will only give each pool job one processor
     elif not args.parallelized_mode_2:
-      p.apply_async(execute_batch,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
-  sys.stderr.write("\n")
+      p.apply_async(execute_batch_pre_alignment,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
   #If we are running jobs as pools we clean up those threads here.
   if args.threads > 1 and not args.parallelized_mode_2:
     p.close()
     p.join()
+  sys.stderr.write("\n")
   return batch_number
 
-def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem):
-  batch = json.loads(batch_json)
-  #step 1 compression
-  sys.stderr.write("... executing batch "+str(batch_number)+".1 (compression)   \r")
-  hpcf = HomopolymerCompressionFactory()
-  if minNumberofNonN: hpcf.set_MinNonN(minNumberofNonN)
-  if maxN: hpcf.set_MaxN(maxN)
-  of_cps = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps','w')
-  of_idx = open(temp_foldername+"LR.fa."+str(batch_number)+'.idx','w')
-  for entry in batch:
-    res = hpcf.compress(entry[1])
-    if not res: continue
-    (cps, pos_ls, len_ls) = res
-    of_cps.write(">"+entry[0]+"\n"+cps+"\n")
-    of_idx.write(entry[0]+"\t"+pos_ls+"\t"+len_ls+"\n")
-  of_cps.close()
-  of_idx.close()
-
-  #step 2 build an index
-  sys.stderr.write("... executing batch "+str(batch_number)+".2 (index)      \r")
-  of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log','w')
-  cmd1 = 'hisat-build '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index'
-  subprocess.call(cmd1.split(),stderr=of_log,stdout=of_log)
-
-  #step 3 map short reads
-  sys.stderr.write("... executing batch "+str(batch_number)+".3 (alignment)   \r")
-  threads = 1
-  cmd2 = 'hisat --reorder -f -p '+str(threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps -S '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam'
-  subprocess.call(cmd2.split(),stderr=of_log,stdout=of_log)
+def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem):
+  of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log3','w')
+  # At this step we can remove the index
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.1.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.2.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.3.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.4.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.5.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.6.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.1.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.2.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.5.bt2")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.6.bt2")
 
   #step 4 convert sam to nav
   sys.stderr.write("... executing batch "+str(batch_number)+".4 (sam to nav)   \r")
@@ -424,12 +458,15 @@ def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,t
   stnf.initialize_target(temp_foldername+'LR.fa.'+str(batch_number)+'.cps')
   with open(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam') as inf:
     for line in inf:
-      navs = stnf.sam_to_nav(line)
-      if not navs: continue
-      for oline in navs:
-        of.write(oline+"\n")
+        navs = stnf.sam_to_nav(line)
+        if not navs: continue
+        for oline in navs:
+          of.write(oline+"\n")
   stnf.close()
   of.close()
+
+  # At this step we can remove the sam
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.sam")
   
   #step 5 sort nav by long read name
   sys.stderr.write("...executing batch "+str(batch_number)+".5 (sort nav)    \r")
@@ -455,13 +492,18 @@ def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,t
   ntmf.close()
   of_map.close()
 
+  # At this step we can remove the nav
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.nav")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.nav.sort")
+
   #step 7 correct
   sys.stderr.write("... executing batch "+str(batch_number)+".7 (correcting)   \r")
   output_prefix = temp_foldername+"output."+str(batch_number)+".file"
-  full_read_file=open(output_prefix+'_full','w')
-  corrected_read_file=open(output_prefix+ '_corrected','w')
-  corrected_read_fq_file=open(output_prefix+'_corrected_fq','w')
-  uncorrected_read_file = open(output_prefix+'_uncorrected','w')
+  temp_prefix = temp_foldername+"tempoutput."+str(batch_number)+".file"
+  full_read_file=open(temp_prefix+'_full','w')
+  corrected_read_file=open(temp_prefix+ '_corrected','w')
+  corrected_read_fq_file=open(temp_prefix+'_corrected_fq','w')
+  uncorrected_read_file = open(temp_prefix+'_uncorrected','w')
   cfmf = CorrectFromMapFactory(temp_foldername+"LR.fa.readnames")
   with open(temp_foldername+"LR_SR.map."+str(batch_number)) as inf:
     for line in inf:
@@ -475,7 +517,38 @@ def execute_batch(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,t
   corrected_read_fq_file.close()
   uncorrected_read_file.close()
   full_read_file.close()
+  move(temp_prefix+'_full',output_prefix+'_full'")
+  move(temp_prefix+'_uncorrected',output_prefix+'_uncorrected'")
+  move(temp_prefix+'_corrected',output_prefix+'_corrected'")
+  move(temp_prefix+'_corrected_fq',output_prefix+'_corrected_fq'")
+
   of_log.close()
+  return
+
+def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem):
+  batch = json.loads(batch_json)
+  #step 1 compression
+  sys.stderr.write("... executing batch "+str(batch_number)+".1 (compression)   \r")
+  hpcf = HomopolymerCompressionFactory()
+  if minNumberofNonN: hpcf.set_MinNonN(minNumberofNonN)
+  if maxN: hpcf.set_MaxN(maxN)
+  of_cps = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps','w')
+  of_idx = open(temp_foldername+"LR.fa."+str(batch_number)+'.idx','w')
+  for entry in batch:
+    res = hpcf.compress(entry[1])
+    if not res: continue
+    (cps, pos_ls, len_ls) = res
+    of_cps.write(">"+entry[0]+"\n"+cps+"\n")
+    of_idx.write(entry[0]+"\t"+pos_ls+"\t"+len_ls+"\n")
+  of_cps.close()
+  of_idx.close()
+
+  #step 2 build an index
+  sys.stderr.write("... executing batch "+str(batch_number)+".2 (index)          \r")
+  of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log1','w')
+  cmd1 = 'hisat-build '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index'
+  subprocess.call(cmd1.split(),stderr=of_log,stdout=of_log)
+  return
 
 if __name__=="__main__":
   main()

@@ -134,7 +134,7 @@ class CorrectFromMapFactory:
       self.LR_read_name_list.append(fields[1])
     
 
-    path,filename = GetPathAndName(LR_SR_mapping_filename)
+    #path,filename = GetPathAndName(LR_SR_mapping_filename)
 
     #self.inf = open(LR_SR_mapping_filename,'r')
     #full_read_file=open(output_prefix+'_full','w')
