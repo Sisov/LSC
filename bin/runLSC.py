@@ -21,7 +21,8 @@ def main():
   version = "2.alpha"
   parser = argparse.ArgumentParser(description="LSC "+version+": Correct errors (e.g. homopolymer errors) in long reads, using short read data",formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--long_reads',required=True,help="FASTAFILE Long reads to correct")
-  parser.add_argument('--short_reads',nargs='+',help="FASTAFILE Short reads used to correct the long reads")
+  parser.add_argument('--short_reads',nargs='+',help="FASTA/FASTQ FILE Short reads used to correct the long reads. Can be multiple files.  If choice is cps reads, then there must be 2 files, the cps and the idx file following --short reads")
+  parser.add_argument('--short_read_file_type',default='fa',choices=['fa','fq','cps'],help="Short read file type")
   parser.add_argument('--threads',type=int,default=0,help="Number of threads (Default = cpu_count)")
   group = parser.add_mutually_exclusive_group()
   group.add_argument('--tempdir',default='/tmp',help="FOLDERNAME where temporary files can be placed")
@@ -42,9 +43,9 @@ def main():
     args.threads = cpu_count()
 
   run_pathfilename = os.path.realpath(__file__)
+  bin_path, run_filename = GetPathAndName(run_pathfilename)
 
   # Establish running parameters here.  Some of these may need to become command line options.
-  python_path = "/usr/bin/python"
   mode = 0
   if args.parallelized_mode_2:
     mode = 2
@@ -53,9 +54,6 @@ def main():
   if (mode == 1 or mode == 2) and not args.specific_tempdir:
     sys.stderr.write("ERROR: if you want to run mode 1 or 2, you will need to define a specific temporary directory to store intermediate files with --specific_tempdir FOLDERNAME\n")
     sys.exit()
-  LR_pathfilename = args.long_reads
-  SR_pathfilename = args.short_reads[0]
-  SR_filetype = 'fa'
   LR_filetype = 'fa'
   I_nonredundant = "N"
   sort_max_mem = -1
@@ -63,7 +61,6 @@ def main():
   bowtie2_options = "--end-to-end -a -f -L 15 --mp 1,1 --np 1 --rdg 0,1 --rfg 0,1 --score-min L,0,-0.08 --no-unal --omit-sec-seq"
 
   #Figure out the path for samtools.  If one is not specified, just try the local.
-  bin_path, run_filename = GetPathAndName(run_pathfilename)
   ofnull = open('/dev/null','w')
   if args.samtools_path == "": #user is not defining their own path
     cmd_sam = 'which samtools'
@@ -107,11 +104,6 @@ def main():
   if not os.path.isdir(temp_foldername + "log"):
     os.makedirs(temp_foldername+"log")
 
-  LR_path, LR_filename = GetPathAndName(LR_pathfilename)
-  SR_path, SR_filename = GetPathAndName(SR_pathfilename)
-
-  python_bin_path = python_path + " " + bin_path
-
   t0 = datetime.datetime.now()
 
   # LSC does have an option for a 'clean_up' step with clean_up.py but I don't recall it being documented 
@@ -120,13 +112,13 @@ def main():
   ################################################################################
   # Remove duplicate short reads first  
   if mode == 0 or mode == 1:    
-    if I_nonredundant == "N" and SR_filetype != "cps":  # If we go in, we want to get a unique set
-        remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path,args)
+    if I_nonredundant == "N" and args.short_read_file_type != "cps":  # If we go in, we want to get a unique set
+        remove_duplicate_short_reads(temp_foldername,args)
         sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
         
   ############################################################################
   # Run compression over short reads
-  if mode == 0 or mode == 1 and SR_filetype != "cps":
+  if (mode == 0 or mode == 1) and args.short_read_file_type != "cps":
     sys.stderr.write("===compress SR:===\n")    
     # At this point we should have uniq fasta formatted reads
     # We may want to consider supportin a unique set of fastq reads also
@@ -139,6 +131,15 @@ def main():
     SR_idx_fh.close()
     sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
         
+  #Handle the case where the input is a set of cps/idx files
+  #In this case we will have alread skipped compression and making things unique
+  if mode == 0 or mode == 1 and args.short_read_type == 'cps':
+    if len(args.short_reads) != 2:
+      sys.stderr.write("ERROR: Short ready type is cps, but the two inputs, .cps and .idx were not given.\n")
+      sys.exit()
+    copyfile(args.short_reads[0],temp_foldername+'SR.fa.cps')
+    copyfile(args.short_reads[1],temp_foldername+'SR.fa.idx')
+
   ##########################################
   # Change the names of the long read files and save the names
   # Previously at this step LSC had an option to remove fragments of long reads
@@ -287,39 +288,38 @@ def GetPathAndName(pathfilename):
   path += '/'
   return path, filename
 
-# Pre: Requires the SR_filetype as fa or fq
-#     SR_pathfilename as the loction of the SR file
-#     temp_foldername is the location of the tempfolder
+# Pre: temp_foldername and the input arguments
 # Post: Writes SR_uniq.fa into tempfolder as a 
 
-def remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin_path,args):
+def remove_duplicate_short_reads(temp_foldername,args):
+  SR_filetype = args.short_read_file_type
   sys.stderr.write("=== sort and uniq SR data ===\n")
-  if SR_filetype == 'fa':
-    gfr = GenericFastaFileReader(SR_pathfilename)
-  elif SR_filetype == 'fq':
-    gfr = GenericFastqFileReader(SR_pathfilename)
-  else:
-    sys.stderr.write("ERROR: invalid SR_filetype "+SR_filetype+"\n")
-    sys.exit()
-  #Launch a pipe to store the unique fasta.  Its a little cumbersome but should
-  #minimize memory usage.  Could go back and add the -S to sort if memory is a problem
-  #cmd = bin_path+"seq2uniqfasta.py --output "+temp_foldername+"SR_uniq.fa --tempdir "+temp_foldername
-  cmd = 'sort -T '+temp_foldername
-  if args.sort_mem_max:
-    cmd += " -S "+str(args.sort_mem_max)
-  cmd += " | uniq -c "
   of = open(temp_foldername+'SR_uniq.seq','w')
-  p = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=of,shell=True)
-  while True:
-    entry = gfr.read_entry()
-    if not entry: break
-    seq = entry['seq'].upper()
-    p.stdin.write(seq+"\n")
-  p.communicate()
+  for SR_pathfilename in args.short_reads:
+    if SR_filetype == 'fa':
+      gfr = GenericFastaFileReader(SR_pathfilename)
+    elif SR_filetype == 'fq':
+      gfr = GenericFastqFileReader(SR_pathfilename)
+    else:
+      sys.stderr.write("ERROR: invalid SR_filetype "+SR_filetype+"\n")
+      sys.exit()
+    #Launch a pipe to store the unique fasta.  Its a little cumbersome but should
+    #minimize memory usage.  Could go back and add the -S to sort if memory is a problem
+    cmd = 'sort -T '+temp_foldername
+    if args.sort_mem_max:
+      cmd += " -S "+str(args.sort_mem_max)
+    cmd += " | uniq -c "
+    p = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=of,shell=True)
+    while True:
+      entry = gfr.read_entry()
+      if not entry: break
+      seq = entry['seq'].upper()
+      p.stdin.write(seq+"\n")
+    p.communicate()
   of.close()
   z = 0
-  SR_pathfilename = temp_foldername + "SR_uniq.fa"
-  of = open(SR_pathfilename,'w')
+  output_SR_pathfilename = temp_foldername + "SR_uniq.fa"
+  of = open(output_SR_pathfilename,'w')
   with open(temp_foldername+'SR_uniq.seq') as inf:
     for line in inf:
       z += 1
@@ -329,7 +329,7 @@ def remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin
         sys.stderr.write("ERROR unable to process uniq -c line "+line+"\n")
       of.write(">"+str(z)+"_"+m.group(1)+"\n"+m.group(2)+"\n")
   of.close
-  return SR_pathfilename
+  return output_SR_pathfilename
 
 def compress_SR(short_read_file,args):
   gfr = GenericFastaFileReader(short_read_file)
