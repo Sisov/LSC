@@ -36,6 +36,7 @@ def main():
   parser.add_argument('--error_rate_threshold',type=int,default=12,help="Maximum percent of errors in a read to use the alignment")
   parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
   parser.add_argument('--long_read_batch_size',type=int,default=5000,help="INT number of long reads to work on at a time")
+  parser.add_argument('--samtools_path',default='',help="Path to samtools by default assumes its installed.")
   args = parser.parse_args()
   if args.threads == 0:
     args.threads = cpu_count()
@@ -61,6 +62,19 @@ def main():
   clean_up = 0
   bowtie2_options = "--end-to-end -a -f -L 15 --mp 1,1 --np 1 --rdg 0,1 --rfg 0,1 --score-min L,0,-0.08 --no-unal --omit-sec-seq"
 
+  #Figure out the path for samtools.  If one is not specified, just try the local.
+  bin_path, run_filename = GetPathAndName(run_pathfilename)
+  ofnull = open('/dev/null','w')
+  if args.samtools_path == "": #user is not defining their own path
+    cmd_sam = 'which samtools'
+    p = subprocess.Popen(cmd_sam.split(),stderr=ofnull,stdout=subprocess.PIPE)
+    output, err = p.communicate()
+    if len(output.rstrip()) > 0 and re.search('samtools$',output.rstrip()):
+      #samtools is already installed
+      args.samtools_path = output.rstrip('/')
+    else: # try to use a local samtools
+      args.samtools_path = bin_path.rstrip('/')+'/../samtools-1.2/samtools'
+  ofnull.close()
   sys.stderr.write("=== Welcome to LSC " + version + " ===\n")
   
   ################################################################################
@@ -93,7 +107,6 @@ def main():
   if not os.path.isdir(temp_foldername + "log"):
     os.makedirs(temp_foldername+"log")
 
-  bin_path, run_filename = GetPathAndName(run_pathfilename)
   LR_path, LR_filename = GetPathAndName(LR_pathfilename)
   SR_path, SR_filename = GetPathAndName(SR_pathfilename)
 
@@ -485,7 +498,7 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   of.close()
 
   # At this step we can remove the sam
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.sam")
+  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.bam")
   
   #step 5 sort nav by long read name
   sys.stderr.write("...executing batch "+str(batch_number)+".5 (sort nav)    \r")
