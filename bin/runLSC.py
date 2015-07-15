@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-import argparse, sys, os, json, subprocess
+import argparse, sys, os, json, subprocess, re
 import datetime
 from multiprocessing import cpu_count, Pool
 from random import randint
@@ -290,17 +290,32 @@ def remove_duplicate_short_reads(SR_filetype,SR_pathfilename,temp_foldername,bin
     sys.exit()
   #Launch a pipe to store the unique fasta.  Its a little cumbersome but should
   #minimize memory usage.  Could go back and add the -S to sort if memory is a problem
-  cmd = bin_path+"seq2uniqfasta.py --output "+temp_foldername+"SR_uniq.fa --tempdir "+temp_foldername
+  #cmd = bin_path+"seq2uniqfasta.py --output "+temp_foldername+"SR_uniq.fa --tempdir "+temp_foldername
+  cmd = 'sort -T '+temp_foldername
   if args.sort_mem_max:
-    cmd += " --sort_mem "+str(args.sort_mem_max)
-  p = subprocess.Popen(cmd.split(),stdin=subprocess.PIPE)
+    cmd += " -S "+str(args.sort_mem_max)
+  cmd += " | uniq -c "
+  of = open(temp_foldername+'SR_uniq.seq','w')
+  p = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=of,shell=True)
   while True:
     entry = gfr.read_entry()
     if not entry: break
     seq = entry['seq'].upper()
     p.stdin.write(seq+"\n")
   p.communicate()
+  of.close()
+  z = 0
   SR_pathfilename = temp_foldername + "SR_uniq.fa"
+  of = open(SR_pathfilename,'w')
+  with open(temp_foldername+'SR_uniq.seq') as inf:
+    for line in inf:
+      z += 1
+      line = line.rstrip()
+      m = re.match('^\s*(\d+)\s+(\S+)$',line)
+      if not m:
+        sys.stderr.write("ERROR unable to process uniq -c line "+line+"\n")
+      of.write(">"+str(z)+"_"+m.group(1)+"\n"+m.group(2)+"\n")
+  of.close
   return SR_pathfilename
 
 def compress_SR(short_read_file,args):
@@ -517,10 +532,10 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   corrected_read_fq_file.close()
   uncorrected_read_file.close()
   full_read_file.close()
-  move(temp_prefix+'_full',output_prefix+'_full'")
-  move(temp_prefix+'_uncorrected',output_prefix+'_uncorrected'")
-  move(temp_prefix+'_corrected',output_prefix+'_corrected'")
-  move(temp_prefix+'_corrected_fq',output_prefix+'_corrected_fq'")
+  move(temp_prefix+'_full',output_prefix+'_full')
+  move(temp_prefix+'_uncorrected',output_prefix+'_uncorrected')
+  move(temp_prefix+'_corrected',output_prefix+'_corrected')
+  move(temp_prefix+'_corrected_fq',output_prefix+'_corrected_fq')
 
   of_log.close()
   return
