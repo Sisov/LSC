@@ -200,8 +200,8 @@ def main():
       if not args.parallelized_mode_2 or args.parallelized_mode_2 == batch_number:
         of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log2','w')
         sys.stderr.write("... step 3 aligning "+str(batch_number)+"/"+str(total_batches)+"   \r")
-        cmd2 = 'hisat --end-to-end --no-spliced-alignment --no-unal --omit-sec-seq -a --reorder -f -p '+str(args.threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps -S '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam'
-        subprocess.call(cmd2.split(),stderr=of_log,stdout=of_log)
+        cmd2 = 'hisat --end-to-end --no-spliced-alignment --no-unal --omit-sec-seq -a --reorder -f -p '+str(args.threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps | samtools view -Sb - > '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.bam'
+        subprocess.call(cmd2,stderr=of_log,stdout=of_log,shell=True)
         of_log.close()
     sys.stderr.write("\n")
 
@@ -471,12 +471,16 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   stnf.set_error_rate_threshold(error_rate_threshold)
   stnf.initialize_compressed_query(temp_foldername+'SR.fa.cps',temp_foldername+'SR.fa.idx')
   stnf.initialize_target(temp_foldername+'LR.fa.'+str(batch_number)+'.cps')
-  with open(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.sam') as inf:
-    for line in inf:
-        navs = stnf.sam_to_nav(line)
-        if not navs: continue
-        for oline in navs:
-          of.write(oline+"\n")
+  cmd4 = 'samtools view '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.bam'
+  p = subprocess.Popen(cmd4,stdout=subprocess.PIPE,shell=True)
+  while True:
+    line = p.stdout.readline()
+    if not line: break
+    navs = stnf.sam_to_nav(line)
+    if not navs: continue
+    for oline in navs:
+      of.write(oline+"\n")
+  p.communicate()
   stnf.close()
   of.close()
 
