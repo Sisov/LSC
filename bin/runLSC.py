@@ -10,6 +10,7 @@ from SequenceCompressionBasics import HomopolymerCompressionFactory
 from SamToNavBasics import SamToNavFactory
 from NavToMapBasics import NavToMapFactory
 from CorrectFromMapBasics import CorrectFromMapFactory
+from AlignmentBasics import GenericAlignerCaller, GenericAlignerIndexBuilder
 
 def main():
   # Run modes for runLSC.py are
@@ -31,13 +32,14 @@ def main():
   group = parser.add_mutually_exclusive_group()
   group.add_argument('--mode',default=0,choices=[0,1,2,3],type=int,help="0: run through")
   group.add_argument('--parallelized_mode_2',type=int,help="Mode 2, but you specify a sigle batch to execute.")
+  parser.add_argument('--aligner',default='hisat',choices=['hisat','bowtie2'],help="Aligner choice")
   parser.add_argument('--sort_mem_max',type=int,help="-S option for memory in unix sort")
   parser.add_argument('--minNumberofNonN',type=int,default=40,help="Minimum number of non-N characters in the compressed read")
   parser.add_argument('--maxN',type=int,help="Maximum number of Ns in the compressed read")
   parser.add_argument('--error_rate_threshold',type=int,default=12,help="Maximum percent of errors in a read to use the alignment")
   parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
   parser.add_argument('--long_read_batch_size',type=int,default=5000,help="INT number of long reads to work on at a time")
-  parser.add_argument('--samtools_path',default='',help="Path to samtools by default assumes its installed.")
+  parser.add_argument('--samtools_path',default='samtools',help="Path to samtools by default assumes its installed.")
   args = parser.parse_args()
   if args.threads == 0:
     args.threads = cpu_count()
@@ -62,13 +64,13 @@ def main():
 
   #Figure out the path for samtools.  If one is not specified, just try the local.
   ofnull = open('/dev/null','w')
-  if args.samtools_path == "": #user is not defining their own path
+  if args.samtools_path == "samtools": #user is not defining their own path
     cmd_sam = 'which samtools'
     p = subprocess.Popen(cmd_sam.split(),stderr=ofnull,stdout=subprocess.PIPE)
     output, err = p.communicate()
     if len(output.rstrip()) > 0 and re.search('samtools$',output.rstrip()):
       #samtools is already installed
-      args.samtools_path = output.rstrip('/')
+      args.samtools_path = output.rstrip()
     else: # try to use a local samtools
       args.samtools_path = bin_path.rstrip('/')+'/../samtools-1.2/samtools'
   ofnull.close()
@@ -133,7 +135,7 @@ def main():
         
   #Handle the case where the input is a set of cps/idx files
   #In this case we will have alread skipped compression and making things unique
-  if mode == 0 or mode == 1 and args.short_read_type == 'cps':
+  if mode == 0 or mode == 1 and args.short_read_file_type == 'cps':
     if len(args.short_reads) != 2:
       sys.stderr.write("ERROR: Short ready type is cps, but the two inputs, .cps and .idx were not given.\n")
       sys.exit()
@@ -212,11 +214,14 @@ def main():
   if mode == 0 or mode == 2:
     for batch_number in range(1,total_batches+1):
       if not args.parallelized_mode_2 or args.parallelized_mode_2 == batch_number:
-        of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log2','w')
         sys.stderr.write("... step 3 aligning "+str(batch_number)+"/"+str(total_batches)+"   \r")
-        cmd2 = 'hisat --end-to-end --no-spliced-alignment --no-unal --omit-sec-seq -a --reorder -f -p '+str(args.threads)+' -x '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index -U '+temp_foldername+'SR.fa.cps | samtools view -Sb - > '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.bam'
-        subprocess.call(cmd2,stderr=of_log,stdout=of_log,shell=True)
-        of_log.close()
+        of = open(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.bam','w')
+        gac = GenericAlignerCaller(args.aligner,temp_foldername+'SR.fa.cps')
+        gac.set_samtools_path(args.samtools_path)
+        #sys.stderr.write(args.samtools_path+"\n")
+        gac.set_threads(args.threads)
+        gac.execute(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.aligner-index',of)
+        of.close()
     sys.stderr.write("\n")
 
   ###############################################
@@ -414,11 +419,11 @@ def execute_LR(args,temp_foldername,total_batches):
   for batch_number in range(1,total_batches+1):
     # We will not use Pool if we are only using one thread or we are doing parallelized mode
     if (not args.parallelized_mode_2 and args.threads <= 1) or args.parallelized_mode_2 == batch_number:
-      execute_batch(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
+      execute_batch(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.samtools_path)
     # We will launch by Pool if we are only running on one system.
     # In this case we only give each pool job one processor
     elif not args.parallelized_mode_2:
-      p.apply_async(execute_batch,args=(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
+      p.apply_async(execute_batch,args=(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.samtools_path))
   #If we are running jobs as pools we clean up those threads here.
   if args.threads > 1 and not args.parallelized_mode_2:
     p.close()
@@ -440,22 +445,22 @@ def execute_pre_alignment(lr_filename,args,temp_foldername,batchsize):
       batch_number += 1
       # We will not use Pool if we are only using one thread or we are doing parallelized mode
       if (not args.parallelized_mode_2 and args.threads <= 1) or args.parallelized_mode_2 == batch_number:
-        execute_batch_pre_alignment(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
+        execute_batch_pre_alignment(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.aligner)
       # We will launch by Pool if we are only running on one system.
       # In this case we only give each pool job one processor
       elif not args.parallelized_mode_2:
-        p.apply_async(execute_batch_pre_alignment,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
+        p.apply_async(execute_batch_pre_alignment,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.aligner))
       batch = []
   #Handle the case were a buffered sequence(s) still needs run.
   if len(batch) > 0:
     batch_number += 1
     # We will not use Pool if we are only using one thread or we are doing parallelized mode
     if (not args.parallelized_mode_2 and args.threads <= 1) or args.parallelized_mode_2 == batch_number:
-      execute_batch_pre_alignment(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max)
+      execute_batch_pre_alignment(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.aligner)
     # We will launch by Pool if we are only running on one system.
     # In this case we will only give each pool job one processor
     elif not args.parallelized_mode_2:
-      p.apply_async(execute_batch_pre_alignment,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max))
+      p.apply_async(execute_batch_pre_alignment,args=(json.dumps(batch),batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.aligner))
   #If we are running jobs as pools we clean up those threads here.
   if args.threads > 1 and not args.parallelized_mode_2:
     p.close()
@@ -463,19 +468,10 @@ def execute_pre_alignment(lr_filename,args,temp_foldername,batchsize):
   sys.stderr.write("\n")
   return batch_number
 
-def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem):
+def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,samtools_path):
   of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log3','w')
   # At this step we can remove the index
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.1.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.2.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.3.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.4.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.5.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.6.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.1.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.2.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.5.bt2")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.6.bt2")
+  #os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.6.bt2")
 
   #step 4 convert sam to nav
   sys.stderr.write("... executing batch "+str(batch_number)+".4 (sam to nav)   \r")
@@ -484,7 +480,7 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   stnf.set_error_rate_threshold(error_rate_threshold)
   stnf.initialize_compressed_query(temp_foldername+'SR.fa.cps',temp_foldername+'SR.fa.idx')
   stnf.initialize_target(temp_foldername+'LR.fa.'+str(batch_number)+'.cps')
-  cmd4 = 'samtools view '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.bam'
+  cmd4 = samtools_path+' view '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.bam'
   p = subprocess.Popen(cmd4,stdout=subprocess.PIPE,shell=True)
   while True:
     line = p.stdout.readline()
@@ -497,7 +493,7 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   stnf.close()
   of.close()
 
-  # At this step we can remove the sam
+  # At this step we can remove the bam
   os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.bam")
   
   #step 5 sort nav by long read name
@@ -557,7 +553,7 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   of_log.close()
   return
 
-def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem):
+def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,aligner):
   batch = json.loads(batch_json)
   #step 1 compression
   sys.stderr.write("... executing batch "+str(batch_number)+".1 (compression)   \r")
@@ -577,9 +573,9 @@ def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,tem
 
   #step 2 build an index
   sys.stderr.write("... executing batch "+str(batch_number)+".2 (index)          \r")
-  of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log1','w')
-  cmd1 = 'hisat-build '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.hisat-index'
-  subprocess.call(cmd1.split(),stderr=of_log,stdout=of_log)
+  infile = temp_foldername+'LR.fa.'+str(batch_number)+'.cps'
+  gaib = GenericAlignerIndexBuilder(aligner,infile)
+  gaib.execute(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.aligner-index')
   return
 
 if __name__=="__main__":
