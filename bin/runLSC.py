@@ -29,16 +29,18 @@ def main():
   group.add_argument('--tempdir',default='/tmp',help="FOLDERNAME where temporary files can be placed")
   group.add_argument('--specific_tempdir',help="FOLDERNAME of exactly where to place temproary folders")
   parser.add_argument('-o','--output',required=True,help="FOLDERNAME where output is to be written")
-  group = parser.add_mutually_exclusive_group()
-  group.add_argument('--mode',default=0,choices=[0,1,2,3],type=int,help="0: run through")
-  group.add_argument('--parallelized_mode_2',type=int,help="Mode 2, but you specify a sigle batch to execute.")
+  group1 = parser.add_mutually_exclusive_group()
+  group1.add_argument('--mode',default=0,choices=[0,1,2,3],type=int,help="0: run through")
+  group1.add_argument('--parallelized_mode_2',type=int,help="Mode 2, but you specify a sigle batch to execute.")
   parser.add_argument('--aligner',default='hisat',choices=['hisat','bowtie2'],help="Aligner choice")
   parser.add_argument('--sort_mem_max',type=int,help="-S option for memory in unix sort")
   parser.add_argument('--minNumberofNonN',type=int,default=40,help="Minimum number of non-N characters in the compressed read")
   parser.add_argument('--maxN',type=int,help="Maximum number of Ns in the compressed read")
   parser.add_argument('--error_rate_threshold',type=int,default=12,help="Maximum percent of errors in a read to use the alignment")
   parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
-  parser.add_argument('--long_read_batch_size',type=int,default=5000,help="INT number of long reads to work on at a time")
+  #group2 = parser.add_mutually_exclusive_group()
+  #group2.add_argument('--job_count',type=int,help="INT number of jobs to break the processing into")
+  parser.add_argument('--long_read_batch_size',default=5000,type=int,help="INT number of long reads to work on at a time")
   parser.add_argument('--samtools_path',default='samtools',help="Path to samtools by default assumes its installed.")
   args = parser.parse_args()
   if args.threads == 0:
@@ -125,6 +127,28 @@ def main():
   if not os.path.exists(temp_foldername+'Log_Files'):
     os.makedirs(temp_foldername+'Log_Files')
 
+  ##########################################
+  # Change the names of the long read files and save the names
+  # Previously at this step LSC had an option to remove fragments of long reads
+  # That were usually the start and ending tails
+  # That step is for pacbio reads and could be done without short reads, 
+  # and thus seems to fall out of the scope of the purpose of LSC
+  if mode == 0 or mode == 1:
+    sys.stderr.write("===rename LR:===\n")    
+    gfr = GenericFastaFileReader(args.long_reads)
+    of_lr = open(temp_foldername+'LR.fa','w')
+    of_lr_readnames = open(temp_foldername+'LR.fa.readnames','w')
+    z = 0
+    while True:
+      entry = gfr.read_entry()
+      if not entry: break
+      z += 1
+      of_lr.write(">"+str(z)+"\n"+entry['seq'].upper()+"\n")
+      of_lr_readnames.write(str(z)+"\t"+entry['name']+"\n")
+    of_lr.close()
+    of_lr_readnames.close()
+    sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
+
   ################################################################################
   # Remove duplicate short reads first  
   if mode == 0 or mode == 1:    
@@ -155,28 +179,6 @@ def main():
       sys.exit()
     copyfile(args.short_reads[0],temp_foldername+'SR.fa.cps')
     copyfile(args.short_reads[1],temp_foldername+'SR.fa.idx')
-
-  ##########################################
-  # Change the names of the long read files and save the names
-  # Previously at this step LSC had an option to remove fragments of long reads
-  # That were usually the start and ending tails
-  # That step is for pacbio reads and could be done without short reads, 
-  # and thus seems to fall out of the scope of the purpose of LSC
-  if mode == 0 or mode == 1:
-    sys.stderr.write("===rename LR:===\n")    
-    gfr = GenericFastaFileReader(args.long_reads)
-    of_lr = open(temp_foldername+'LR.fa','w')
-    of_lr_readnames = open(temp_foldername+'LR.fa.readnames','w')
-    z = 0
-    while True:
-      entry = gfr.read_entry()
-      if not entry: break
-      z += 1
-      of_lr.write(">"+str(z)+"\n"+entry['seq'].upper()+"\n")
-      of_lr_readnames.write(str(z)+"\t"+entry['name']+"\n")
-    of_lr.close()
-    of_lr_readnames.close()
-    sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
 
   ######################################################################
   # Find the total number of batches we will run (regardless of run type)
@@ -410,8 +412,8 @@ def batch_count_LR(lr_filename,batchsize):
       if batch_current >= batchsize:
         batch_number += 1
         batch_current = 0
-    if batch_current > 0:
-      batch_number += 1
+  if batch_current > 0:
+    batch_number += 1
   return batch_number
 
 # This function launches our jobs (mode 2), and decides at which level (if any) to parallelize the job based on mode and thread counts.
