@@ -4,7 +4,7 @@ import argparse, sys, os, json, subprocess, re
 import datetime
 from multiprocessing import cpu_count, Pool
 from random import randint
-from shutil import copyfile, move
+from shutil import copyfile, move, rmtree
 from SequenceBasics import GenericFastaFileReader, GenericFastqFileReader
 from SequenceCompressionBasics import HomopolymerCompressionFactory
 from SamToNavBasics import SamToNavFactory
@@ -103,14 +103,28 @@ def main():
       sys.exit()
     else: 
       os.makedirs(temp_foldername)
-  if not os.path.isdir(temp_foldername + "log"):
-    os.makedirs(temp_foldername+"log")
-
   t0 = datetime.datetime.now()
 
   # LSC does have an option for a 'clean_up' step with clean_up.py but I don't recall it being documented 
   # note that clean_up.py took as inputs the temp folder, and the two cpu_counts
-        
+  
+  # Make sure some folders that will eventually need to be there get there ASAP   
+  # These will also get made on the fly if they happen to not be there but we might as well try to make them prior to parallelization
+  if not os.path.exists(temp_foldername+'LR_Compressed'):
+    os.makedirs(temp_foldername+'LR_Compressed')
+  if not os.path.exists(temp_foldername+'Aligner_Indices'):
+    os.makedirs(temp_foldername+'Aligner_Indices')
+  if not os.path.exists(temp_foldername+'Alignments'):
+    os.makedirs(temp_foldername+'Alignments')
+  if not os.path.exists(temp_foldername+'Nav_Files'):
+    os.makedirs(temp_foldername+'Nav_Files')
+  if not os.path.exists(temp_foldername+'Map_Files'):
+    os.makedirs(temp_foldername+'Map_Files')
+  if not os.path.exists(temp_foldername+'Output_Files'):
+    os.makedirs(temp_foldername+'Output_Files')
+  if not os.path.exists(temp_foldername+'Log_Files'):
+    os.makedirs(temp_foldername+'Log_Files')
+
   ################################################################################
   # Remove duplicate short reads first  
   if mode == 0 or mode == 1:    
@@ -135,7 +149,7 @@ def main():
         
   #Handle the case where the input is a set of cps/idx files
   #In this case we will have alread skipped compression and making things unique
-  if mode == 0 or mode == 1 and args.short_read_file_type == 'cps':
+  if (mode == 0 or mode == 1) and args.short_read_file_type == 'cps':
     if len(args.short_reads) != 2:
       sys.stderr.write("ERROR: Short ready type is cps, but the two inputs, .cps and .idx were not given.\n")
       sys.exit()
@@ -203,7 +217,11 @@ def main():
   # This is the step where parallelization aught to come in to play
   # so I am ending mode 1 at this step.
   if mode == 0 or mode == 2:
-    sys.stderr.write("===compress LR, samParser LR.??.cps.nav:===\n")    
+    sys.stderr.write("===compress LR, samParser LR.??.cps.nav:===\n")
+    if not os.path.exists(temp_foldername+'LR_Compressed'):
+      os.makedirs(temp_foldername+'LR_Compressed')
+    if not os.path.exists(temp_foldername+'Aligner_Indices'):
+      os.makedirs(temp_foldername+'Aligner_Indices')
     execute_pre_alignment(temp_foldername+'LR.fa',args,temp_foldername,args.long_read_batch_size)
     sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
 
@@ -212,15 +230,17 @@ def main():
   # one at a time since disk reads on the files seem to come at a premium
   #step 3 map short reads
   if mode == 0 or mode == 2:
+    if not os.path.exists(temp_foldername+'/Alignments'):
+      os.makedirs(temp_foldername+'/Alignments')
     for batch_number in range(1,total_batches+1):
       if not args.parallelized_mode_2 or args.parallelized_mode_2 == batch_number:
         sys.stderr.write("... step 3 aligning "+str(batch_number)+"/"+str(total_batches)+"   \r")
-        of = open(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.bam','w')
+        of = open(temp_foldername+'/Alignments/LR.fa.'+str(batch_number)+'.cps.bam','w')
         gac = GenericAlignerCaller(args.aligner,temp_foldername+'SR.fa.cps')
         gac.set_samtools_path(args.samtools_path)
         #sys.stderr.write(args.samtools_path+"\n")
         gac.set_threads(args.threads)
-        gac.execute(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.aligner-index',of)
+        gac.execute(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/LR.fa.'+str(batch_number)+'.cps.aligner-index',of)
         of.close()
     sys.stderr.write("\n")
 
@@ -253,28 +273,28 @@ def main():
       total_batches = read_batches
     sys.stderr.write("Producing outputs from "+str(total_batches)+" batches\n")
     for i in range(1,total_batches+1):
-      if not os.path.isfile(temp_foldername+"output."+str(i)+".file_uncorrected"):
-        sys.stderr.write("Warning missing file "+temp_foldername+"output."+str(i)+".file_uncorrected"+"\n")
+      if not os.path.isfile(temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_uncorrected"):
+        sys.stderr.write("Warning missing file "+temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_uncorrected"+"\n")
       else:
-        with open(temp_foldername+"output."+str(i)+".file_uncorrected") as inf:
+        with open(temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_uncorrected") as inf:
           for line in inf:
             of_uncorrected.write(line)
-      if not os.path.isfile(temp_foldername+"output."+str(i)+".file_corrected"):
+      if not os.path.isfile(temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_corrected"):
         sys.stderr.write("Warning missing file "+temp_foldername+"output."+str(i)+".file_uncorrected"+"\n")
       else:
-        with open(temp_foldername+"output."+str(i)+".file_corrected") as inf:
+        with open(temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_corrected") as inf:
           for line in inf:
             of_corrected.write(line)
-      if not os.path.isfile(temp_foldername+"output."+str(i)+".file_corrected_fq"):
-        sys.stderr.write("Warning missing file "+temp_foldername+"output."+str(i)+".file_corrected_fq"+"\n")
+      if not os.path.isfile(temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_corrected_fq"):
+        sys.stderr.write("Warning missing file "+temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_corrected_fq"+"\n")
       else:
-        with open(temp_foldername+"output."+str(i)+".file_corrected_fq") as inf:
+        with open(temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_corrected_fq") as inf:
           for line in inf:
             of_corrected_fq.write(line)
-      if not os.path.isfile(temp_foldername+"output."+str(i)+".file_full"):
+      if not os.path.isfile(temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_full"):
         sys.stderr.write("Warning missing file "+temp_foldername+"output."+str(i)+".file_full"+"\n")
       else:
-        with open(temp_foldername+"output."+str(i)+".file_full") as inf:
+        with open(temp_foldername+'Output_Files/'+str(i)+"/output."+str(i)+".file_full") as inf:
           for line in inf:
             of_full.write(line)
     of_uncorrected.close()
@@ -469,18 +489,22 @@ def execute_pre_alignment(lr_filename,args,temp_foldername,batchsize):
   return batch_number
 
 def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,samtools_path):
-  of_log = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps'+'.log3','w')
+  if not os.path.exists(temp_foldername+'Log_Files'):
+    os.makedirs(temp_foldername+'Log_Files')
+  of_log = open(temp_foldername+"Log_Files/LR.fa."+str(batch_number)+'.cps'+'.log3','w')
   # At this step we can remove the index
-  #os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.hisat-index.rev.6.bt2")
+  rmtree(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/')
 
   #step 4 convert sam to nav
-  sys.stderr.write("... executing batch "+str(batch_number)+".4 (sam to nav)   \r")
-  of = open(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.nav','w')
+  if not os.path.exists(temp_foldername+'Nav_Files'):
+    os.makedirs(temp_foldername+'Nav_Files')
+  sys.stderr.write("... executing batch "+str(batch_number)+".4 (bam to nav)   \r")
+  of = open(temp_foldername+'Nav_Files/LR.fa.'+str(batch_number)+'.cps.nav','w')
   stnf = SamToNavFactory()
   stnf.set_error_rate_threshold(error_rate_threshold)
   stnf.initialize_compressed_query(temp_foldername+'SR.fa.cps',temp_foldername+'SR.fa.idx')
-  stnf.initialize_target(temp_foldername+'LR.fa.'+str(batch_number)+'.cps')
-  cmd4 = samtools_path+' view '+temp_foldername+'LR.fa.'+str(batch_number)+'.cps.bam'
+  stnf.initialize_target(temp_foldername+'LR_Compressed/'+str(batch_number)+'/LR.fa.'+str(batch_number)+'.cps')
+  cmd4 = samtools_path+' view '+temp_foldername+'/Alignments/LR.fa.'+str(batch_number)+'.cps.bam'
   p = subprocess.Popen(cmd4,stdout=subprocess.PIPE,shell=True)
   while True:
     line = p.stdout.readline()
@@ -494,25 +518,27 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   of.close()
 
   # At this step we can remove the bam
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.bam")
+  os.remove(temp_foldername+"Alignments/LR.fa."+str(batch_number)+".cps.bam")
   
   #step 5 sort nav by long read name
   sys.stderr.write("...executing batch "+str(batch_number)+".5 (sort nav)    \r")
   sort_cmd =  "sort -T "+temp_foldername+" "
   if sort_max_mem:
     sort_cmd += "-S "+str(sort_max_mem)+" "
-  sort_cmd += "-nk 2 " + temp_foldername+ "LR.fa."+str(batch_number)+".cps.nav "
-  sort_cmd += "-o "+temp_foldername+"LR.fa."+str(batch_number)+".cps.nav.sort"
+  sort_cmd += "-nk 2 " + temp_foldername+ "Nav_Files/LR.fa."+str(batch_number)+".cps.nav "
+  sort_cmd += "-o "+temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav.sort"
   subprocess.call(sort_cmd.split(),stderr=of_log,stdout=of_log)  
 
   #step 6 nav to mapping
+  if not os.path.exists(temp_foldername+'Map_Files'):
+    os.makedirs(temp_foldername+'Map_Files')
   sys.stderr.write("... executing batch "+str(batch_number)+".6 (nav to map)   \r")
-  ntmf = NavToMapFactory(temp_foldername+"LR.fa."+str(batch_number)+".cps.nav.sort", \
-         temp_foldername+"LR.fa."+str(batch_number)+".cps", \
-         temp_foldername+"LR.fa."+str(batch_number)+".idx", \
+  ntmf = NavToMapFactory(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav.sort", \
+         temp_foldername+"LR_Compressed/"+str(batch_number)+"/LR.fa."+str(batch_number)+".cps", \
+         temp_foldername+"LR_Compressed/"+str(batch_number)+"/LR.fa."+str(batch_number)+".idx", \
          temp_foldername+"LR.fa.readnames", \
          short_read_coverage_threshold)
-  of_map = open(temp_foldername+"LR_SR.map."+str(batch_number),'w')
+  of_map = open(temp_foldername+"Map_Files/LR_SR.map."+str(batch_number),'w')
   while True:
     entry = ntmf.read_entry()
     if not entry: break
@@ -521,19 +547,23 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   of_map.close()
 
   # At this step we can remove the nav
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.nav")
-  os.remove(temp_foldername+"LR.fa."+str(batch_number)+".cps.nav.sort")
+  os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav")
+  os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav.sort")
 
   #step 7 correct
   sys.stderr.write("... executing batch "+str(batch_number)+".7 (correcting)   \r")
-  output_prefix = temp_foldername+"output."+str(batch_number)+".file"
-  temp_prefix = temp_foldername+"tempoutput."+str(batch_number)+".file"
+  if not os.path.exists(temp_foldername+'Output_Files'):
+    os.makedirs(temp_foldername+'Output_Files')
+  if not os.path.exists(temp_foldername+'Output_Files/'+str(batch_number)):
+    os.makedirs(temp_foldername+'Output_Files/'+str(batch_number))
+  output_prefix = temp_foldername+'Output_Files/'+str(batch_number)+"/output."+str(batch_number)+".file"
+  temp_prefix = temp_foldername+'Output_Files/'+str(batch_number)+"/tempoutput."+str(batch_number)+".file"
   full_read_file=open(temp_prefix+'_full','w')
   corrected_read_file=open(temp_prefix+ '_corrected','w')
   corrected_read_fq_file=open(temp_prefix+'_corrected_fq','w')
   uncorrected_read_file = open(temp_prefix+'_uncorrected','w')
   cfmf = CorrectFromMapFactory(temp_foldername+"LR.fa.readnames")
-  with open(temp_foldername+"LR_SR.map."+str(batch_number)) as inf:
+  with open(temp_foldername+"Map_Files/LR_SR.map."+str(batch_number)) as inf:
     for line in inf:
       output = cfmf.correct_map_line(line)
       if not output: continue
@@ -557,11 +587,13 @@ def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,tem
   batch = json.loads(batch_json)
   #step 1 compression
   sys.stderr.write("... executing batch "+str(batch_number)+".1 (compression)   \r")
+  if not os.path.exists(temp_foldername+'LR_Compressed/'+str(batch_number)):
+    os.makedirs(temp_foldername+'LR_Compressed/'+str(batch_number))
   hpcf = HomopolymerCompressionFactory()
   if minNumberofNonN: hpcf.set_MinNonN(minNumberofNonN)
   if maxN: hpcf.set_MaxN(maxN)
-  of_cps = open(temp_foldername+"LR.fa."+str(batch_number)+'.cps','w')
-  of_idx = open(temp_foldername+"LR.fa."+str(batch_number)+'.idx','w')
+  of_cps = open(temp_foldername+"LR_Compressed/"+str(batch_number)+"/LR.fa."+str(batch_number)+'.cps','w')
+  of_idx = open(temp_foldername+"LR_Compressed/"+str(batch_number)+"/LR.fa."+str(batch_number)+'.idx','w')
   for entry in batch:
     res = hpcf.compress(entry[1])
     if not res: continue
@@ -573,9 +605,11 @@ def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,tem
 
   #step 2 build an index
   sys.stderr.write("... executing batch "+str(batch_number)+".2 (index)          \r")
-  infile = temp_foldername+'LR.fa.'+str(batch_number)+'.cps'
+  if not os.path.exists(temp_foldername+'Aligner_Indices/'+str(batch_number)):
+    os.makedirs(temp_foldername+'Aligner_Indices/'+str(batch_number))
+  infile = temp_foldername+'LR_Compressed/'+str(batch_number)+'/LR.fa.'+str(batch_number)+'.cps'
   gaib = GenericAlignerIndexBuilder(aligner,infile)
-  gaib.execute(temp_foldername+'LR.fa.'+str(batch_number)+'.cps.aligner-index')
+  gaib.execute(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/LR.fa.'+str(batch_number)+'.cps.aligner-index')
   return
 
 if __name__=="__main__":
