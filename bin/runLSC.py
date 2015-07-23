@@ -58,11 +58,7 @@ def main():
   if (mode == 1 or mode == 2) and not args.specific_tempdir:
     sys.stderr.write("ERROR: if you want to run mode 1 or 2, you will need to define a specific temporary directory to store intermediate files with --specific_tempdir FOLDERNAME\n")
     sys.exit()
-  LR_filetype = 'fa'
   I_nonredundant = "N"
-  sort_max_mem = -1
-  clean_up = 0
-  bowtie2_options = "--end-to-end -a -f -L 15 --mp 1,1 --np 1 --rdg 0,1 --rfg 0,1 --score-min L,0,-0.08 --no-unal --omit-sec-seq"
 
   #Figure out the path for samtools.  If one is not specified, just try the local.
   ofnull = open('/dev/null','w')
@@ -97,6 +93,7 @@ def main():
 
   if mode > 1 and not args.specific_tempdir:
     sys.stderr.write("Error: to run mode 2 or 3 you need to specify a temporary directory with --specific_tempdir.  An easy way to create one is to run mode 1 with the --specific_tempdir option.\n")
+    sys.exit()
 
   if not os.path.isdir(temp_foldername):
     if mode == 2:
@@ -240,7 +237,6 @@ def main():
         of = open(temp_foldername+'/Alignments/LR.fa.'+str(batch_number)+'.cps.bam','w')
         gac = GenericAlignerCaller(args.aligner,temp_foldername+'SR.fa.cps')
         gac.set_samtools_path(args.samtools_path)
-        #sys.stderr.write(args.samtools_path+"\n")
         gac.set_threads(args.threads)
         gac.execute(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/LR.fa.'+str(batch_number)+'.cps.aligner-index',of)
         of.close()
