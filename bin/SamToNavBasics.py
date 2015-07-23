@@ -1,42 +1,36 @@
 import sys, re
-from SequenceBasics import GenericFastaFileReader
+from SequenceBasics import GenericFastaFileReader, rc
 
 #Generate a novoalign native format file from a sam format file
 
-rev_cmplmnt_map = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N': 'N', 
-                   'a': 't', 'c': 'g', 'g': 'c', 't': 'a', 'n': 'n'}
-rev_cmplmnt_bases = rev_cmplmnt_map.keys()
-def reverse_complement(seq):
-    
-    output_seq = ''
-    len_seq = len(seq)
-    for i in range(len_seq):
-        if (seq[len_seq - 1 - i] in rev_cmplmnt_bases):
-            output_seq += rev_cmplmnt_map[seq[len_seq - 1 - i]]
-        else:
-            print "Err: Unexpected base in short read sequence: " + seq
-            output_seq += seq[len_seq - 1 - i]
-        
-    return output_seq
-    
-
+### get_SR_sequence ######
+#
+# Read the short read sequence (compressed version) from a file that is ordered
+# by short read name
+#
+# Pre: SR_file - an open generic fasta file reader to the homopolymer compressed fasta file
+#      SR_idx_file - an open file handle to the idx file from the homopolymer compressed sequence
+#      SR_seq_readname - the name of the sequence to retrieve
+# Post:  Return the nucleotide sequence (compressed) and the compression scheme (2nd field onward from idx file) in a tsv format.
+# Modifies: Will step forward in the file handles and fasta file reader
+#           Therefore the file must be ordered so that each requested read comes sequentially later in the file
 def get_SR_sequence(SR_file, SR_idx_file, SR_seq_readname):
-    read_name = "invalid_read_name"
-    while (read_name != SR_seq_readname):
-        read_name = (SR_file.readline().strip())
-        if (not read_name):
-            print "Err: HC SR sequence not found."
-            exit(1) 
-        if (read_name[0] != '>'):
-            continue    # unexpected string
-        read_name = read_name[1:]
-        SR_seq = SR_file.readline().strip().upper()
-        SR_idx_seq = SR_idx_file.readline().strip().split('\t')
-        if(SR_idx_seq[0] != read_name):
-            print "Err: SR.fa.cps and SR.fa.idx do not match."
-            exit(1) 
-        SR_idx_seq = '\t'.join(SR_idx_seq[1:])
-    return [SR_seq, SR_idx_seq]
+  read_name = "invalid_read_name"
+  SR_seq = None
+  SR_idx_seq = None
+  while (read_name != SR_seq_readname):
+    entry = SR_file.read_entry()
+    if not entry:
+      sys.stderr.write("Err: HC SR sequence not found.\n")
+      sys.exit() 
+    read_name = entry['name']
+    SR_seq = entry['seq'].upper()
+    SR_idx_seq = SR_idx_file.readline().strip().split('\t')
+    if SR_idx_seq[0] != read_name:
+      sys.stderr.write("Err: SR.fa.cps and SR.fa.idx do not match.\n")
+      sys.exit()
+    SR_idx_seq = '\t'.join(SR_idx_seq[1:])
+  return [SR_seq, SR_idx_seq]
 
 class SamToNavFactory:
   #SR_file (query) and SR_idx_file must go in the same order as 
@@ -45,6 +39,9 @@ class SamToNavFactory:
     self.error_rate_threshold = 100
     self.one_line_per_alignment = False # BWA will put them all on one line
     self.current_query = "invalid read name"
+    self.SR_seq = None
+    self.SR_idx_seq = None
+    self.SR_seq_rvs_cmplmnt = None
     return
 
   def set_error_rate_threshold(self,error_rate_threshold):
@@ -56,7 +53,7 @@ class SamToNavFactory:
     return
 
   def initialize_compressed_query(self,SR_filename,SR_idx_filename):
-    self.SR_file = open(SR_filename)
+    self.SR_file = GenericFastaFileReader(SR_filename)
     self.SR_idx_file = open(SR_idx_filename)
     return
 
@@ -71,8 +68,6 @@ class SamToNavFactory:
     return self.LR_seq
 
   def sam_to_nav(self,line):
-    SR_seq = ""
-    SR_seq_rvs_cmplmnt = ""
     if not self.LR_seq:
       sys.stderr.write("ERROR initialize target first\n")
     if not self.SR_file:
@@ -88,10 +83,9 @@ class SamToNavFactory:
     
     SR_name = line_fields[0]
     if (SR_name != self.current_query):
-        [SR_seq, SR_idx_seq] = get_SR_sequence(self.SR_file, self.SR_idx_file, SR_name)
-        SR_seq_rvs_cmplmnt = reverse_complement(SR_seq)
+        [self.SR_seq, self.SR_idx_seq] = get_SR_sequence(self.SR_file, self.SR_idx_file, SR_name)
+        self.SR_seq_rvs_cmplmnt = rc(self.SR_seq)
         self.current_query = SR_name
-    
     if (int(line_fields[1]) & 0x10):     # Check if seq is reversed complement
         line_fields[3] = '-' + line_fields[3]
     else:
@@ -108,7 +102,7 @@ class SamToNavFactory:
         align_list =  multi_align_str[:-1].split(';')
         
 
-    read_seq_len = len(SR_seq)
+    read_seq_len = len(self.SR_seq)
     ostrings = []
     for align_str in align_list:
         err_state = False
@@ -117,10 +111,10 @@ class SamToNavFactory:
         ref_seq = self.LR_seq[fields[0]]
         ref_seq_len = len(ref_seq)
         if (fields[1][0] == '-'):     # Check if seq is reversed complement
-            read_seq = SR_seq_rvs_cmplmnt
+            read_seq = self.SR_seq_rvs_cmplmnt
             pseudo_SR_name = "-" + SR_name
         else:
-            read_seq = SR_seq
+            read_seq = self.SR_seq
             pseudo_SR_name = SR_name
         fields[1] = fields[1][1:]
         read_idx = 0
@@ -176,7 +170,7 @@ class SamToNavFactory:
                 diff_list.append("*")
             err_rate = (100 * num_err) / read_seq_len
             if (err_rate <= self.error_rate_threshold):
-                ostrings.append('\t'.join([pseudo_SR_name, fields[0], fields[1], ' '.join(diff_list),SR_seq, SR_idx_seq]))
+                ostrings.append('\t'.join([pseudo_SR_name, fields[0], fields[1], ' '.join(diff_list),self.SR_seq, self.SR_idx_seq]))
     if len(ostrings) == 0: return None
     return ostrings
   def close(self):
