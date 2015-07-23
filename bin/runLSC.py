@@ -32,7 +32,7 @@ def main():
   group1 = parser.add_mutually_exclusive_group()
   group1.add_argument('--mode',default=0,choices=[0,1,2,3],type=int,help="0: run through")
   group1.add_argument('--parallelized_mode_2',type=int,help="Mode 2, but you specify a sigle batch to execute.")
-  parser.add_argument('--aligner',default='hisat',choices=['hisat','bowtie2'],help="Aligner choice")
+  parser.add_argument('--aligner',default='bowtie2',choices=['hisat','bowtie2'],help="Aligner choice")
   parser.add_argument('--sort_mem_max',type=int,help="-S option for memory in unix sort")
   parser.add_argument('--minNumberofNonN',type=int,default=40,help="Minimum number of non-N characters in the compressed read")
   parser.add_argument('--maxN',type=int,help="Maximum number of Ns in the compressed read")
@@ -495,7 +495,7 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
     os.makedirs(temp_foldername+'Log_Files')
   of_log = open(temp_foldername+"Log_Files/LR.fa."+str(batch_number)+'.cps'+'.log3','w')
   # At this step we can remove the index
-  rmtree(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/')
+  #rmtree(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/')
 
   #step 4 convert sam to nav
   if not os.path.exists(temp_foldername+'Nav_Files'):
@@ -520,7 +520,7 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   of.close()
 
   # At this step we can remove the bam
-  os.remove(temp_foldername+"Alignments/LR.fa."+str(batch_number)+".cps.bam")
+  #os.remove(temp_foldername+"Alignments/LR.fa."+str(batch_number)+".cps.bam")
   
   #step 5 sort nav by long read name
   sys.stderr.write("...executing batch "+str(batch_number)+".5 (sort nav)    \r")
@@ -549,8 +549,8 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   of_map.close()
 
   # At this step we can remove the nav
-  os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav")
-  os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav.sort")
+  #os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav")
+  #os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav.sort")
 
   #step 7 correct
   sys.stderr.write("... executing batch "+str(batch_number)+".7 (correcting)   \r")

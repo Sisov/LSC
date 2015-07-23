@@ -43,11 +43,12 @@ class GenericAlignerCaller:
     cmd3 = ''
     if self.input_file_type == 'fa': cmd3 = ' -f '
     if self.input_file_type == 'fq': cmd3 = ' -q '
-    cmd = "bowtie2 --end-to-end -a "+cmd3+" -L 15 --mp 1,1 --np 1 --rdg 0,1 --rfg 0,1 --score-min L,0,-0.08 --no-unal --omit-sec-seq --reorder"+' -p '+str(self.threads)+' -x '+self.index_file+' -U '+self.input_file
+    #cmd = "bowtie2 --end-to-end -a "+cmd3+" -L 15 --mp 1,1 --np 1 --rdg 0,1 --rfg 0,1 --score-min L,0,-0.08 --no-unal --omit-sec-seq --reorder"+' -p '+str(self.threads)+' -x '+self.index_file+' -U '+self.input_file
+    cmd = "bowtie2 --end-to-end -a "+cmd3+" -L 15 --mp 1,1 --np 1 --rdg 0,1 --rfg 0,1 --score-min L,0,-0.12 --no-unal --reorder"+' -p '+str(self.threads)+' -x '+self.index_file+' -U '+self.input_file
     cmd2 = ' | '+self.samtools_path+' view -Sb -'
     if self.output_type == 'bam':
       cmd += cmd2
-    #sys.stderr.write(cmd+"\n")
+    sys.stderr.write("\n"+cmd+"\n")
     subprocess.call(cmd,shell=True,stdout=self.output_handle,stderr=self.error_output_handle)
     return
 
