@@ -437,11 +437,11 @@ def execute_LR(args,temp_foldername,total_batches):
   for batch_number in range(1,total_batches+1):
     # We will not use Pool if we are only using one thread or we are doing parallelized mode
     if (not args.parallelized_mode_2 and args.threads <= 1) or args.parallelized_mode_2 == batch_number:
-      execute_batch(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.samtools_path)
+      execute_batch(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.samtools_path,args.long_read_batch_size)
     # We will launch by Pool if we are only running on one system.
     # In this case we only give each pool job one processor
     elif not args.parallelized_mode_2:
-      p.apply_async(execute_batch,args=(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.samtools_path))
+      p.apply_async(execute_batch,args=(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.samtools_path,args.long_read_batch_size))
   #If we are running jobs as pools we clean up those threads here.
   if args.threads > 1 and not args.parallelized_mode_2:
     p.close()
@@ -486,7 +486,7 @@ def execute_pre_alignment(lr_filename,args,temp_foldername,batchsize):
   sys.stderr.write("\n")
   return batch_number
 
-def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,samtools_path):
+def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,samtools_path,long_read_batch_size):
   if not os.path.exists(temp_foldername+'Log_Files'):
     os.makedirs(temp_foldername+'Log_Files')
   of_log = open(temp_foldername+"Log_Files/LR.fa."+str(batch_number)+'.cps'+'.log3','w')
@@ -556,23 +556,58 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
     os.makedirs(temp_foldername+'Output_Files/'+str(batch_number))
   output_prefix = temp_foldername+'Output_Files/'+str(batch_number)+"/output."+str(batch_number)+".file"
   temp_prefix = temp_foldername+'Output_Files/'+str(batch_number)+"/tempoutput."+str(batch_number)+".file"
-  full_read_file=open(temp_prefix+'_full','w')
-  corrected_read_file=open(temp_prefix+ '_corrected','w')
-  corrected_read_fq_file=open(temp_prefix+'_corrected_fq','w')
-  uncorrected_read_file = open(temp_prefix+'_uncorrected','w')
-  cfmf = CorrectFromMapFactory(temp_foldername+"LR.fa.readnames")
+  # set up temporary files for writing corrections
+  #handles = {}
+  #handles['full_read_file'] = open(temp_prefix+'_full','w')
+  #full_read_file=open(temp_prefix+'_full','w')
+  #corrected_read_file=open(temp_prefix+ '_corrected','w')
+  #corrected_read_fq_file=open(temp_prefix+'_corrected_fq','w')
+  #uncorrected_read_file = open(temp_prefix+'_uncorrected','w')
+  buffer = []
+  if threads > 1:
+    p = Pool(processes=threads)
+  correction_batch_number = 0
+  long_read_batch_size = int(long_read_batch_size/(threads*100))+1 # work on a few reads at a time
   with open(temp_foldername+"Map_Files/LR_SR.map."+str(batch_number)) as inf:
     for line in inf:
-      output = cfmf.correct_map_line(line)
-      if not output: continue
-      uncorrected_read_file.write(output['uncorrected_fasta'])
-      corrected_read_file.write(output['corrected_fasta'])
-      corrected_read_fq_file.write(output['corrected_fastq'])
-      full_read_file.write(output['full_fasta'])
-  corrected_read_file.close()
-  corrected_read_fq_file.close()
-  uncorrected_read_file.close()
-  full_read_file.close()
+      buffer.append(line)
+      if len(buffer) >= long_read_batch_size:
+        correction_batch_number += 1
+        if threads > 1:
+          p.apply_async(do_corrections,args=(buffer,temp_foldername,correction_batch_number,temp_prefix))
+        else:
+          do_corrections(buffer,temp_foldername,correction_batch_number,temp_prefix)
+        buffer = []
+  if len(buffer) > 0:
+    correction_batch_number += 1
+    if threads > 1:
+      p.apply_async(do_corrections,args=(buffer,temp_foldername,correction_batch_number,temp_prefix))
+    else:
+      do_corrections(buffer,temp_foldername,correction_batch_number,temp_prefix)
+  if threads > 1:
+    p.close()
+    p.join()
+  of1 = open(temp_prefix+'_full','w')
+  of2 = open(temp_prefix+'_uncorrected','w')
+  of3 = open(temp_prefix+'_corrected','w')
+  of4 = open(temp_prefix+'_corrected_fq','w')
+  for num in range(1,correction_batch_number+1):
+    with open(temp_prefix+'_full.'+str(num)) as inf:
+      for line in inf:
+        of1.write(line)
+    with open(temp_prefix+'_uncorrected.'+str(num)) as inf:
+      for line in inf:
+        of2.write(line)
+    with open(temp_prefix+'_corrected.'+str(num)) as inf:
+      for line in inf:
+        of3.write(line)
+    with open(temp_prefix+'_corrected_fq.'+str(num)) as inf:
+      for line in inf:
+        of4.write(line)
+  of1.close()
+  of2.close()
+  of3.close()
+  of4.close()
   move(temp_prefix+'_full',output_prefix+'_full')
   move(temp_prefix+'_uncorrected',output_prefix+'_uncorrected')
   move(temp_prefix+'_corrected',output_prefix+'_corrected')
@@ -580,6 +615,36 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
 
   of_log.close()
   return
+
+#def do_corrections_callback(outputs1):
+#  [outputs,handles] = outputs1
+#  for output in outputs:
+#    handles['uncorrected_read_file'].write(output['uncorrected_fasta'])
+#    handles['corrected_read_file'].write(output['corrected_fasta'])
+#    handles['corrected_read_fq_file'].write(output['corrected_fastq'])
+#    handles['full_read_file'].write(output['full_fasta'])
+#  return
+
+def do_corrections(batch,temp_foldername,correction_batch_number,temp_prefix):
+  cfmf = CorrectFromMapFactory(temp_foldername+"LR.fa.readnames")
+  temp = {}
+  full_read_file=open(temp_prefix+'_full.'+str(correction_batch_number),'w')
+  corrected_read_file=open(temp_prefix+ '_corrected.'+str(correction_batch_number),'w')
+  corrected_read_fq_file=open(temp_prefix+'_corrected_fq.'+str(correction_batch_number),'w')
+  uncorrected_read_file = open(temp_prefix+'_uncorrected.'+str(correction_batch_number),'w')
+  outputs = []
+  for line in batch:
+    output = cfmf.correct_map_line(line)
+    uncorrected_read_file.write(output['uncorrected_fasta'])
+    corrected_read_file.write(output['corrected_fasta'])
+    corrected_read_fq_file.write(output['corrected_fastq'])
+    full_read_file.write(output['full_fasta'])
+    if not output: continue
+    outputs.append(output)
+  full_read_file.close()
+  corrected_read_file.close()
+  corrected_read_fq_file.close()
+  uncorrected_read_file.close()
 
 def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,aligner):
   batch = json.loads(batch_json)

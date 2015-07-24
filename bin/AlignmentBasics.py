@@ -48,7 +48,7 @@ class GenericAlignerCaller:
     cmd2 = ' | '+self.samtools_path+' view -Sb -'
     if self.output_type == 'bam':
       cmd += cmd2
-    sys.stderr.write("\n"+cmd+"\n")
+    #sys.stderr.write("\n"+cmd+"\n")
     subprocess.call(cmd,shell=True,stdout=self.output_handle,stderr=self.error_output_handle)
     return
 
