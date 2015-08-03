@@ -42,8 +42,14 @@ class SamToNavFactory:
     self.SR_seq = None
     self.SR_idx_seq = None
     self.SR_seq_rvs_cmplmnt = None
+    self.line_count = 0
+    self.thread_count = 1
+    self.thread_index = 1
     return
-
+  def set_thread_count(self,thread_count):
+    self.thread_count = thread_count
+  def set_thread_index(self,thread_index):
+    self.thread_index = thread_index
   def set_error_rate_threshold(self,error_rate_threshold):
     self.error_rate_threshold = error_rate_threshold
     return
@@ -68,6 +74,9 @@ class SamToNavFactory:
     return self.LR_seq
 
   def sam_to_nav(self,line):
+    self.line_count += 1
+    if self.line_count % self.thread_count != self.thread_index-1:
+      return None
     if not self.LR_seq:
       sys.stderr.write("ERROR initialize target first\n")
     if not self.SR_file:

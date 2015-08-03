@@ -40,7 +40,7 @@ def main():
   parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
   #group2 = parser.add_mutually_exclusive_group()
   #group2.add_argument('--job_count',type=int,help="INT number of jobs to break the processing into")
-  parser.add_argument('--long_read_batch_size',default=5000,type=int,help="INT number of long reads to work on at a time")
+  parser.add_argument('--long_read_batch_size',default=500,type=int,help="INT number of long reads to work on at a time")
   parser.add_argument('--samtools_path',default='samtools',help="Path to samtools by default assumes its installed.")
   args = parser.parse_args()
   if args.threads == 0:
@@ -486,19 +486,11 @@ def execute_pre_alignment(lr_filename,args,temp_foldername,batchsize):
   sys.stderr.write("\n")
   return batch_number
 
-def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,samtools_path,long_read_batch_size):
-  if not os.path.exists(temp_foldername+'Log_Files'):
-    os.makedirs(temp_foldername+'Log_Files')
-  of_log = open(temp_foldername+"Log_Files/LR.fa."+str(batch_number)+'.cps'+'.log3','w')
-  # At this step we can remove the index
-  #rmtree(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/')
-
-  #step 4 convert sam to nav
-  if not os.path.exists(temp_foldername+'Nav_Files'):
-    os.makedirs(temp_foldername+'Nav_Files')
-  sys.stderr.write("... executing batch "+str(batch_number)+".4 (bam to nav)   \r")
-  of = open(temp_foldername+'Nav_Files/LR.fa.'+str(batch_number)+'.cps.nav','w')
+def write_nav(temp_foldername,batch_number,threads,i,error_rate_threshold,samtools_path):
+  of = open(temp_foldername+'Nav_Files/LR.fa.'+str(batch_number)+'.cps.'+str(i)+'.nav','w')
   stnf = SamToNavFactory()
+  stnf.set_thread_count(threads)
+  stnf.set_thread_index(i)
   stnf.set_error_rate_threshold(error_rate_threshold)
   stnf.initialize_compressed_query(temp_foldername+'SR.fa.cps',temp_foldername+'SR.fa.idx')
   stnf.initialize_target(temp_foldername+'LR_Compressed/'+str(batch_number)+'/LR.fa.'+str(batch_number)+'.cps')
@@ -515,6 +507,36 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   stnf.close()
   of.close()
 
+def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,samtools_path,long_read_batch_size):
+  if not os.path.exists(temp_foldername+'Log_Files'):
+    os.makedirs(temp_foldername+'Log_Files')
+  of_log = open(temp_foldername+"Log_Files/LR.fa."+str(batch_number)+'.cps'+'.log3','w')
+  # At this step we can remove the index
+  #rmtree(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/')
+
+  #step 4 convert sam to nav
+  if not os.path.exists(temp_foldername+'Nav_Files'):
+    os.makedirs(temp_foldername+'Nav_Files')
+  sys.stderr.write("... executing batch "+str(batch_number)+".4 (bam to nav)   \r")
+  if threads > 1:
+    p = Pool(processes = threads)
+  for i in range(1,threads+1):
+    if threads > 1:
+       p.apply_async(write_nav,args=(temp_foldername,batch_number,threads,i,error_rate_threshold,samtools_path))
+    else:
+      write_nav(temp_foldername,batch_number,threads,i,error_rate_threshold,samtools_path)
+  if threads > 1:
+    p.close()
+    p.join()
+
+  of = open(temp_foldername+'Nav_Files/LR.fa.'+str(batch_number)+'.cps.nav','w')
+  for i in range(1,threads+1):
+    with open(temp_foldername+'Nav_Files/LR.fa.'+str(batch_number)+'.cps.'+str(i)+'.nav') as inf:
+      for line in inf:
+        of.write(line)
+    os.remove(temp_foldername+'Nav_Files/LR.fa.'+str(batch_number)+'.cps.'+str(i)+'.nav')
+  of.close()
+
   # At this step we can remove the bam
   #os.remove(temp_foldername+"Alignments/LR.fa."+str(batch_number)+".cps.bam")
   
@@ -526,6 +548,8 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   sort_cmd += "-nk 2 " + temp_foldername+ "Nav_Files/LR.fa."+str(batch_number)+".cps.nav "
   sort_cmd += "-o "+temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav.sort"
   subprocess.call(sort_cmd.split(),stderr=of_log,stdout=of_log)  
+  # At this step we can remove the nav
+  os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav")
 
   #step 6 nav to mapping
   if not os.path.exists(temp_foldername+'Map_Files'):
@@ -545,8 +569,7 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   of_map.close()
 
   # At this step we can remove the nav
-  #os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav")
-  #os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav.sort")
+  os.remove(temp_foldername+"Nav_Files/LR.fa."+str(batch_number)+".cps.nav.sort")
 
   #step 7 correct
   sys.stderr.write("... executing batch "+str(batch_number)+".7 (correcting)   \r")
