@@ -1,6 +1,16 @@
 import sys, subprocess, os
 from multiprocessing import cpu_count
-
+############################
+### GenericAlignerCaller ###
+# This class povides a generic interface for calling an aligner
+# Pre: GenericAlignerCaller takes an aligner choice and an input file.
+#      You may set the input_file to either 'fa' or 'fq'
+#      'bowtie2' and 'hisat' valid aligners
+#      you can set the output type to 'bam' or 'sam'.
+#      you can specify the samtools_path and thread count
+#      threads defaults to the number processors.
+#      you call it with exit and give it an output handle (could be an open writable filehandle)
+# Post: You write the sam or bam as you've specified to the handle you supply to execute
 class GenericAlignerCaller:
   def __init__(self,aligner,input_file):
     self.aligner_choice = aligner
