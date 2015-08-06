@@ -21,14 +21,14 @@ def main():
   # d. Mode 3: Compile all the individual corrected reads from mode 2 into a single output.
   version = "2.alpha"
   parser = argparse.ArgumentParser(description="LSC "+version+": Correct errors (e.g. homopolymer errors) in long reads, using short read data",formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('--long_reads',required=True,help="FASTAFILE Long reads to correct")
-  parser.add_argument('--short_reads',nargs='+',help="FASTA/FASTQ FILE Short reads used to correct the long reads. Can be multiple files.  If choice is cps reads, then there must be 2 files, the cps and the idx file following --short reads")
+  parser.add_argument('--long_reads',help="FASTAFILE Long reads to correct. Required in mode 0 or 1.")
+  parser.add_argument('--short_reads',nargs='*',help="FASTA/FASTQ FILE Short reads used to correct the long reads. Can be multiple files.  If choice is cps reads, then there must be 2 files, the cps and the idx file following --short reads. Required in mode 0 or 1.")
   parser.add_argument('--short_read_file_type',default='fa',choices=['fa','fq','cps'],help="Short read file type")
   parser.add_argument('--threads',type=int,default=0,help="Number of threads (Default = cpu_count)")
   group = parser.add_mutually_exclusive_group()
   group.add_argument('--tempdir',default='/tmp',help="FOLDERNAME where temporary files can be placed")
-  group.add_argument('--specific_tempdir',help="FOLDERNAME of exactly where to place temproary folders")
-  parser.add_argument('-o','--output',required=True,help="FOLDERNAME where output is to be written")
+  group.add_argument('--specific_tempdir',help="FOLDERNAME of exactly where to place temproary folders. Required in mode 1, 2 or 3.")
+  parser.add_argument('-o','--output',help="FOLDERNAME where output is to be written. Required in mode 0 or 3.")
   group1 = parser.add_mutually_exclusive_group()
   group1.add_argument('--mode',default=0,choices=[0,1,2,3],type=int,help="0: run through")
   group1.add_argument('--parallelized_mode_2',type=int,help="Mode 2, but you specify a sigle batch to execute.")
@@ -38,8 +38,6 @@ def main():
   parser.add_argument('--maxN',type=int,help="Maximum number of Ns in the compressed read")
   parser.add_argument('--error_rate_threshold',type=int,default=12,help="Maximum percent of errors in a read to use the alignment")
   parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
-  #group2 = parser.add_mutually_exclusive_group()
-  #group2.add_argument('--job_count',type=int,help="INT number of jobs to break the processing into")
   parser.add_argument('--long_read_batch_size',default=500,type=int,help="INT number of long reads to work on at a time")
   parser.add_argument('--samtools_path',default='samtools',help="Path to samtools by default assumes its installed.")
   args = parser.parse_args()
@@ -49,16 +47,15 @@ def main():
   run_pathfilename = os.path.realpath(__file__)
   bin_path, run_filename = GetPathAndName(run_pathfilename)
 
+
   # Establish running parameters here.  Some of these may need to become command line options.
   mode = 0
   if args.parallelized_mode_2:
     mode = 2
   elif args.mode:
     mode = args.mode
-  if (mode == 1 or mode == 2) and not args.specific_tempdir:
-    sys.stderr.write("ERROR: if you want to run mode 1 or 2, you will need to define a specific temporary directory to store intermediate files with --specific_tempdir FOLDERNAME\n")
-    sys.exit()
-  I_nonredundant = "N"
+
+  check_argument_mode_compatibility(mode,args)
 
   #Figure out the path for samtools.  If one is not specified, just try the local.
   ofnull = open('/dev/null','w')
@@ -86,14 +83,6 @@ def main():
     if not os.path.isdir(temp_foldername+rname):
       os.makedirs(temp_foldername+rname)
       temp_foldername+=rname+'/'
-  output_foldername = args.output.rstrip('/')+'/'
-
-  if not os.path.isdir(output_foldername):
-    os.makedirs(output_foldername)
-
-  if mode > 1 and not args.specific_tempdir:
-    sys.stderr.write("Error: to run mode 2 or 3 you need to specify a temporary directory with --specific_tempdir.  An easy way to create one is to run mode 1 with the --specific_tempdir option.\n")
-    sys.exit()
 
   if not os.path.isdir(temp_foldername):
     if mode == 2:
@@ -149,9 +138,9 @@ def main():
   ################################################################################
   # Remove duplicate short reads first  
   if mode == 0 or mode == 1:    
-    if I_nonredundant == "N" and args.short_read_file_type != "cps":  # If we go in, we want to get a unique set
-        remove_duplicate_short_reads(temp_foldername,args)
-        sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
+    if args.short_read_file_type != "cps":  # If we go in, we want to get a unique set
+      remove_duplicate_short_reads(temp_foldername,args)
+      sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
         
   ############################################################################
   # Run compression over short reads
@@ -254,6 +243,9 @@ def main():
   ##########################################
   # Combine the batch outputs into final outputs
   if mode == 0 or mode == 3:
+    output_foldername = args.output.rstrip('/')+'/'
+    if not os.path.isdir(output_foldername):
+      os.makedirs(output_foldername)
     sys.stderr.write("===produce outputs:===\n")    
     of_uncorrected = open(temp_foldername+"uncorrected_LR.fa",'w')
     of_corrected = open(temp_foldername+"corrected_LR.fa",'w')
@@ -305,6 +297,8 @@ def main():
     copyfile(temp_foldername+"full_LR.fa",output_foldername+"full_LR.fa")
     sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
 
+#Pre:  A path to a file
+#Post: Return the directory path (with a trailing forward slash), and filename
 def GetPathAndName(pathfilename):
   full_path = os.path.abspath(pathfilename)
   [path, filename] = os.path.split(full_path)
@@ -312,8 +306,9 @@ def GetPathAndName(pathfilename):
   return path, filename
 
 # Pre: temp_foldername and the input arguments
-# Post: Writes SR_uniq.fa into tempfolder as a 
-
+# Post: Writes SR_uniq.fa into tempfolder as fasta with headers in the format to SR_uniq.fa in the temp directory
+#       >X_Y  Where X is a unique integer and Y is the number of times the sequence was observed in the original data
+# Modifies: Makes a temporary SR_uniq.seq that has only the unique sequences (sorted) along the way.
 def remove_duplicate_short_reads(temp_foldername,args):
   SR_filetype = args.short_read_file_type
   sys.stderr.write("=== sort and uniq SR data ===\n")
@@ -354,6 +349,13 @@ def remove_duplicate_short_reads(temp_foldername,args):
   of.close
   return output_SR_pathfilename
 
+# Handle homopolymer compressing all the short read sequences
+# will work on compressing sequences in batches of the batchsize defined in the function
+# Pre: The short read file (SR_uniq.fa), and the input arguments
+#       globals SR_cps_fh and SR_idx_fh need to point to writable files
+# Post: Writes out the compressed sequence through the callback function collect_results
+#       That collect results uses the global file handles SR_cps_fh and SR_idx_fh to write results
+# Modifies: Launch jobs in parallel through Pool
 def compress_SR(short_read_file,args):
   gfr = GenericFastaFileReader(short_read_file)
   batchsize = 100000
@@ -366,15 +368,20 @@ def compress_SR(short_read_file,args):
     batch.append([entry['name'],entry['seq']])
     if len(batch) >= batchsize: # we have enough to process
       p.apply_async(compress_batch,args=(json.dumps(batch),args.minNumberofNonN,args.maxN,),callback=collect_results)
-      #results = compress_batch(batch)
       batch = []
   if len(batch) >= 0:
     p.apply_async(compress_batch,args=(json.dumps(batch),args.minNumberofNonN,args.maxN,),callback=collect_results)
-    #results = compress_batch(batch)
   p.close()
   p.join()
   gfr.close()
 
+# Callback function for compress_batch
+# Pre: SR_cps_fh and SR_idx_fh need to be set to writable files
+#      Results contains the compressed data in the form
+#      name, compressed_sequence, position_array, length_array
+# Post: write compressed sequence to file.  Fasta foramt for cps
+#       and <name> <position array> <length array> for idx
+# Modifies: writes to SR_cps_fh and SR_idx_fh 
 def collect_results(results):
   global SR_cps_fh
   global SR_idx_fh    
@@ -383,6 +390,9 @@ def collect_results(results):
     SR_idx_fh.write(entry[0]+"\t"+entry[2]+"\t"+entry[3]+"\n")
   return
 
+# Compress batch
+# Pre: json coded batch of sequences for compression, and parameters minNumofNonN and maxN
+# Post: name, compressed_sequence, possition array and length array
 def compress_batch(seq_batch_json,minNumberofNonN,maxN):
   seq_batch = json.loads(seq_batch_json)
   result = []
@@ -397,7 +407,10 @@ def compress_batch(seq_batch_json,minNumberofNonN,maxN):
   return result
 
 #########################################
-# see based on our 
+# Get the total number of Batches
+# Pre: lr_filename is long read file
+#      batchsize is the number of batches
+# Post: The number of batches that we have to run given that batch size and number of long reads
 def batch_count_LR(lr_filename,batchsize):
   gfr = GenericFastaFileReader(lr_filename)
   batch_current = 0
@@ -437,11 +450,11 @@ def execute_LR(args,temp_foldername,total_batches):
   for batch_number in range(1,total_batches+1):
     # We will not use Pool if we are only using one thread or we are doing parallelized mode
     if (not args.parallelized_mode_2 and args.threads <= 1) or args.parallelized_mode_2 == batch_number:
-      execute_batch(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,args.threads,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.samtools_path,args.long_read_batch_size)
+      execute_batch(batch_number,temp_foldername,args.threads,args,args.samtools_path,args.long_read_batch_size)
     # We will launch by Pool if we are only running on one system.
     # In this case we only give each pool job one processor
     elif not args.parallelized_mode_2:
-      p.apply_async(execute_batch,args=(batch_number,args.minNumberofNonN,args.maxN,temp_foldername,1,args.error_rate_threshold,args.short_read_coverage_threshold,args.sort_mem_max,args.samtools_path,args.long_read_batch_size))
+      p.apply_async(execute_batch,args=(batch_number,temp_foldername,1,args,args.samtools_path,args.long_read_batch_size))
   #If we are running jobs as pools we clean up those threads here.
   if args.threads > 1 and not args.parallelized_mode_2:
     p.close()
@@ -449,6 +462,11 @@ def execute_LR(args,temp_foldername,total_batches):
   sys.stderr.write("\n")
   return
 
+# Launch parallel jobs for pre-alignment steps.  These will work on batches of long reads
+# Pre: Long read file, arugments, temporary folder, batchsize
+# Post: Writes to the temporary file compressed long reads (for each batch), 
+#       and an aligner index file based on each batch of long reads
+# Modifies: Parallel version of execute_batch_pre_alignment are launched.
 def execute_pre_alignment(lr_filename,args,temp_foldername,batchsize):
   gfr = GenericFastaFileReader(lr_filename)
   batch = []
@@ -486,6 +504,9 @@ def execute_pre_alignment(lr_filename,args,temp_foldername,batchsize):
   sys.stderr.write("\n")
   return batch_number
 
+#For a given batch number write the nav file based on the alignment bam file and alignments
+# Pre: temporary folder, batch number, job sub-index, error_rate_threshold, samtools_path
+# Post: Nav file for the batch number and sub-index is created.
 def write_nav(temp_foldername,batch_number,threads,i,error_rate_threshold,samtools_path):
   of = open(temp_foldername+'Nav_Files/LR.fa.'+str(batch_number)+'.cps.'+str(i)+'.nav','w')
   stnf = SamToNavFactory()
@@ -507,7 +528,19 @@ def write_nav(temp_foldername,batch_number,threads,i,error_rate_threshold,samtoo
   stnf.close()
   of.close()
 
-def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,samtools_path,long_read_batch_size):
+# execute_batch works with a set of long reads to that has already 
+# been prepared into alignment indexs and is accessed according to batch_number
+# Pre: Requires an alignment index already be present in the temporary folder for each batch from 1 to batch_number
+#      batch_number tells it which batch number this function will be working on
+#      temp_foldername is the temporary folder we are working in
+#      error_rate_threshold is an acceptable error rate
+#      short_read_coverage_threshold is an acceptable short read coverage
+#      sort_max_mem is the maximum memory to be used during the sort by a thread
+#      samtools_path is the location of samtools
+#      long_read_batch_size is the number of long reads in each batch
+# Post: Creats nav and map files along the way but ultimately stores corrected outputs in the temporary folder 
+# Modifies: Temp files, can execute steps in parallel if parallelized_mode_2 is being run and multiple threads are specified.
+def execute_batch(batch_number,temp_foldername,threads,samtools_path,long_read_batch_size):
   if not os.path.exists(temp_foldername+'Log_Files'):
     os.makedirs(temp_foldername+'Log_Files')
   of_log = open(temp_foldername+"Log_Files/LR.fa."+str(batch_number)+'.cps'+'.log3','w')
@@ -579,13 +612,7 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
     os.makedirs(temp_foldername+'Output_Files/'+str(batch_number))
   output_prefix = temp_foldername+'Output_Files/'+str(batch_number)+"/output."+str(batch_number)+".file"
   temp_prefix = temp_foldername+'Output_Files/'+str(batch_number)+"/tempoutput."+str(batch_number)+".file"
-  # set up temporary files for writing corrections
-  #handles = {}
-  #handles['full_read_file'] = open(temp_prefix+'_full','w')
-  #full_read_file=open(temp_prefix+'_full','w')
-  #corrected_read_file=open(temp_prefix+ '_corrected','w')
-  #corrected_read_fq_file=open(temp_prefix+'_corrected_fq','w')
-  #uncorrected_read_file = open(temp_prefix+'_uncorrected','w')
+
   buffer = []
   if threads > 1:
     p = Pool(processes=threads)
@@ -639,15 +666,13 @@ def execute_batch(batch_number,minNumberofNonN,maxN,temp_foldername,threads,erro
   of_log.close()
   return
 
-#def do_corrections_callback(outputs1):
-#  [outputs,handles] = outputs1
-#  for output in outputs:
-#    handles['uncorrected_read_file'].write(output['uncorrected_fasta'])
-#    handles['corrected_read_file'].write(output['corrected_fasta'])
-#    handles['corrected_read_fq_file'].write(output['corrected_fastq'])
-#    handles['full_read_file'].write(output['full_fasta'])
-#  return
-
+# Execute corrections on a batch of reads
+# Pre: batch - is an array of map file lines ready for correction
+#      temp_foldername the temporary foldeer we are working in
+#      correction_batch_number the subset of the job we are working on 
+#      temp_prefix the file prefix for where we are storing our temporary files
+# Post: Written to temp_prefix we have full, corrected, uncorrected fasta/fastq files.
+# Modifies: Temporary folder contents
 def do_corrections(batch,temp_foldername,correction_batch_number,temp_prefix):
   cfmf = CorrectFromMapFactory(temp_foldername+"LR.fa.readnames")
   temp = {}
@@ -669,6 +694,12 @@ def do_corrections(batch,temp_foldername,correction_batch_number,temp_prefix):
   corrected_read_fq_file.close()
   uncorrected_read_file.close()
 
+# Execute the prealignment steps of long read compression then index building
+# Pre: batch_json - json enocded batch of long reads
+#      minNumberofNonN - smallest number of on N values to consider
+#      maxN - largest number of N values to consider.
+#      temp_foldername the folder we are working in
+# 
 def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,temp_foldername,threads,error_rate_threshold,short_read_coverage_threshold,sort_max_mem,aligner):
   batch = json.loads(batch_json)
   #step 1 compression
@@ -696,6 +727,32 @@ def execute_batch_pre_alignment(batch_json,batch_number,minNumberofNonN,maxN,tem
   infile = temp_foldername+'LR_Compressed/'+str(batch_number)+'/LR.fa.'+str(batch_number)+'.cps'
   gaib = GenericAlignerIndexBuilder(aligner,infile)
   gaib.execute(temp_foldername+'Aligner_Indices/'+str(batch_number)+'/LR.fa.'+str(batch_number)+'.cps.aligner-index')
+  return
+
+# Pre our run mode 0, 1, 2 or 3, and our input args from argparse
+# Post: Returns nothing. Exits hard with error message if incompatabilities in mode and parameter requirements are present
+def check_argument_mode_compatibility(mode,args):
+  # If we are mode 0 or mode 1 make sure we have required parameters
+  if mode == 0 or mode == 1:
+    if not args.long_reads:
+      sys.stderr.write("ERROR: please specify --long_reads when in mode 0 or mode 1")
+      sys.exit()
+    if not args.short_reads:
+      sys.stderr.write("ERROR: please specify --short_reads when in mode 0 or mode 1")
+      sys.exit()
+
+  if (mode == 1 or mode == 2) and not args.specific_tempdir:
+    sys.stderr.write("ERROR: if you want to run mode 1 or 2, you will need to define a specific temporary directory to store intermediate files with --specific_tempdir FOLDERNAME\n")
+    sys.exit()
+
+  if mode == 0 or mode == 3:
+    if not args.output:
+      sys.stderr.write("ERROR please specify output folder when running mode 0 or 3\n")
+      sys.exit()
+
+  if mode > 1 and not args.specific_tempdir:
+    sys.stderr.write("Error: to run mode 2 or 3 you need to specify a temporary directory with --specific_tempdir.  An easy way to create one is to run mode 1 with the --specific_tempdir option.\n")
+    sys.exit()
   return
 
 if __name__=="__main__":
