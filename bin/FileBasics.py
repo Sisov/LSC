@@ -1,4 +1,4 @@
-import re, os, sys
+import re, os, sys, gzip
 from random import randint
 from shutil import rmtree
 import subprocess
@@ -9,29 +9,33 @@ class GenericFileReader:
   def __init__(self,filename):
     self.filename = filename
     self.type  = 'normal'
+    self.fh = None
     if re.search('\.gz$',self.filename): # do it as a gzipped stream
-      cmd = 'zcat '+filename
-      args = cmd.split()
-      self.process = subprocess.Popen(args,stdout=subprocess.PIPE)
+      #cmd = 'zcat '+filename
+      #args = cmd.split()
+      #self.process = subprocess.Popen(args,stdout=subprocess.PIPE,bufsize=1)
       self.type = 'gzipped'
+      self.fh = gzip.open(self.filename)
     else:
-      self.normal_filehandle = open(filename)
+      self.fh = open(filename)
+      #self.normal_filehandle = open(filename)
       #cmd = 'cat '+filename
       #args = cmd.split()
       #self.process = subprocess.Popen(args,bufsize=0,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 
   def close(self):
-    if self.type == 'gzipped':
-      if self.process:
-        self.process.kill()
-    else:
-      self.normal_filehandle.close()
+    #if self.type == 'gzipped':
+    #  if self.process:
+    #    self.process.kill()
+    #else:
+    #  self.normal_filehandle.close()
+    self.fh.close()
 
   def readline(self):
-    if self.type == 'gzipped':
-      return self.process.stdout.readline()
-    return self.normal_filehandle.readline()
-
+    #if self.type == 'gzipped':
+    #  return self.process.stdout.readline()
+    #return self.normal_filehandle.readline()
+    return self.fh.readline()
 # make_tempdir2
 # Makes an empty random directory in tmp and returns the path
 # Pre: <basename1> <basename2>

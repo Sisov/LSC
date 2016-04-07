@@ -39,7 +39,7 @@ def main():
   parser.add_argument('--error_rate_threshold',type=int,default=12,help="Maximum percent of errors in a read to use the alignment")
   parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
   parser.add_argument('--long_read_batch_size',default=500,type=int,help="INT number of long reads to work on at a time")
-  parser.add_argument('--samtools_path',default='samtools',help="Path to samtools by default assumes its installed.")
+  parser.add_argument('--samtools_path',default='samtools',help="Path to samtools by default assumes its installed.  If not specified, the included version will be used.")
   args = parser.parse_args()
   if args.threads == 0:
     args.threads = cpu_count()
@@ -98,6 +98,8 @@ def main():
   
   # Make sure some folders that will eventually need to be there get there ASAP   
   # These will also get made on the fly if they happen to not be there but we might as well try to make them prior to parallelization
+  if not os.path.exists(temp_foldername+'Split_Short'):
+    os.makedirs(temp_foldername+'Split_Short')
   if not os.path.exists(temp_foldername+'LR_Compressed'):
     os.makedirs(temp_foldername+'LR_Compressed')
   if not os.path.exists(temp_foldername+'Aligner_Indices'):
@@ -312,28 +314,72 @@ def GetPathAndName(pathfilename):
 def remove_duplicate_short_reads(temp_foldername,args):
   SR_filetype = args.short_read_file_type
   sys.stderr.write("=== sort and uniq SR data ===\n")
-  of = open(temp_foldername+'SR_uniq.seq','w')
+  cwd = os.path.dirname(os.path.realpath(__file__))
+  udir = cwd+'/../utilities'
+
+  cmd4 = 'split -l 1000000 - '+temp_foldername+'Split_Short/unsort.'
+  p4 = subprocess.Popen(cmd4.split(),stdin=subprocess.PIPE,bufsize=1)
   for SR_pathfilename in args.short_reads:
+    #Running these through command line scripts because its faster than python
+    cmd1 = 'cat '+SR_pathfilename
+    if re.search('\.gz$',SR_pathfilename):
+      cmd1 = 'zcat '+SR_pathfilename
     if SR_filetype == 'fa':
-      gfr = GenericFastaFileReader(SR_pathfilename)
+      cmd2 = udir+'/fasta_to_tsv.pl'
     elif SR_filetype == 'fq':
-      gfr = GenericFastqFileReader(SR_pathfilename)
+      cmd2 = udir+'/fastq_to_tsv.pl'
     else:
       sys.stderr.write("ERROR: invalid SR_filetype "+SR_filetype+"\n")
       sys.exit()
-    #Launch a pipe to store the unique fasta.  Its a little cumbersome but should
-    #minimize memory usage.  Could go back and add the -S to sort if memory is a problem
-    cmd = 'sort -T '+temp_foldername
-    if args.sort_mem_max:
-      cmd += " -S "+str(args.sort_mem_max)
-    cmd += " | uniq -c "
-    p = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=of,shell=True)
-    while True:
-      entry = gfr.read_entry()
-      if not entry: break
-      seq = entry['seq'].upper()
-      p.stdin.write(seq+"\n")
-    p.communicate()
+    cmd3 = 'cut -f 2'
+    p3 = subprocess.Popen(cmd3.split(),stdin=subprocess.PIPE,stdout=p4.stdin,bufsize=1)
+    p2 = subprocess.Popen(cmd2.split(),stdin=subprocess.PIPE,stdout=p3.stdin,bufsize=1)
+    p1 = subprocess.Popen(cmd1.split(),stdout=p2.stdin,bufsize=1)
+    p1.communicate()
+    p2.communicate()
+    p3.communicate()
+    # reads through all SR files this way
+  p4.communicate()
+
+  # Now we do the sort operation
+  of = open(temp_foldername+'SR_uniq.seq','w')
+  fnames = os.listdir(temp_foldername+'Split_Short')
+  if args.threads > 1:
+    p = Pool(processes=args.threads)
+  snames = []
+  for n in fnames:
+    path = temp_foldername+'Split_Short/'+n
+    m = re.search('^(.*)unsort\.([^\.]+)$',path)
+    if not m: continue # must be a left over sorted output from another run
+    spath = m.group(1)+'sort.'+m.group(2)
+    snames.append(spath)
+    if args.threads > 1:
+      p.apply_async(do_sort,args=(path,spath,))
+    else:
+      do_sort(path,spath)
+    #print path
+    #print spath
+  if args.threads > 1:
+    p.close()
+    p.join()
+  of.close()
+
+  ### Temporary can delete when not debuging (should be fine even if you dont)
+  snames = [temp_foldername+'Split_Short/'+x for x in os.listdir(temp_foldername+'Split_Short') if re.match('^sort',x)]
+  # now we can put them back together
+  if len(snames)==0:
+    sys.stderr.write("ERROR no sorted short reads\n")
+    sys.exit()
+  # now final merge
+  cmd1 = 'sort --batch-size='+str(len(snames))+' -m'
+  for n in snames:
+    cmd1 += ' '+n
+  of = open(temp_foldername+'SR_uniq.seq','w')
+  p1 = subprocess.Popen(cmd1.split(),stdout=subprocess.PIPE)
+  cmd2 = 'uniq -c'
+  p2 = subprocess.Popen(cmd2.split(),stdin=p1.stdout,stdout=of)
+  p2.communicate()
+  p1.communicate()
   of.close()
   z = 0
   output_SR_pathfilename = temp_foldername + "SR_uniq.fa"
@@ -348,6 +394,16 @@ def remove_duplicate_short_reads(temp_foldername,args):
       of.write(">"+str(z)+"_"+m.group(1)+"\n"+m.group(2)+"\n")
   of.close
   return output_SR_pathfilename
+
+
+#Simple call to sort
+def do_sort(path,spath):
+  dn = open(os.devnull,'w')
+  of = open(spath,'w')
+  cmd1 = 'sort '+path
+  p = subprocess.Popen(cmd1.split(),stdout=of,bufsize=1,stderr=dn)
+  p.communicate()
+  return
 
 # Handle homopolymer compressing all the short read sequences
 # will work on compressing sequences in batches of the batchsize defined in the function
