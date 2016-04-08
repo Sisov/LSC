@@ -21,7 +21,7 @@ def main():
   # c. Mode 2: Run the alignment all the way through correction.
   # c(alternative). Parallelized Mode 2: Run the alignment all the way through correction on a subset of long reads.
   # d. Mode 3: Compile all the individual corrected reads from mode 2 into a single output.
-  version = "2.alpha"
+  version = "2.0"
   parser = argparse.ArgumentParser(description="LSC "+version+": Correct errors (e.g. homopolymer errors) in long reads, using short read data",formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--long_reads',help="FASTAFILE Long reads to correct. Required in mode 0 or 1.")
   parser.add_argument('--short_reads',nargs='*',help="FASTA/FASTQ FILE Short reads used to correct the long reads. Can be multiple files.  If choice is cps reads, then there must be 2 files, the cps and the idx file following --short reads. Required in mode 0 or 1.")
