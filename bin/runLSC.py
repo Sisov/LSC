@@ -2,7 +2,7 @@
 
 import argparse, sys, os, json, subprocess, re
 import datetime
-from multiprocessing import cpu_count, Pool
+from multiprocessing import cpu_count, Pool, Lock
 from random import randint
 from shutil import copyfile, move, rmtree
 from SequenceBasics import GenericFastaFileReader, GenericFastqFileReader
@@ -11,6 +11,8 @@ from SamToNavBasics import SamToNavFactory
 from NavToMapBasics import NavToMapFactory
 from CorrectFromMapBasics import CorrectFromMapFactory
 from AlignmentBasics import GenericAlignerCaller, GenericAlignerIndexBuilder
+
+glock = Lock()
 
 def main():
   # Run modes for runLSC.py are
@@ -143,20 +145,14 @@ def main():
     if args.short_read_file_type != "cps":  # If we go in, we want to get a unique set
       remove_duplicate_short_reads(temp_foldername,args)
       sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
-        
+
   ############################################################################
   # Run compression over short reads
   if (mode == 0 or mode == 1) and args.short_read_file_type != "cps":
     sys.stderr.write("===compress SR:===\n")    
     # At this point we should have uniq fasta formatted reads
     # We may want to consider supportin a unique set of fastq reads also
-    global SR_cps_fh
-    global SR_idx_fh
-    SR_cps_fh = open(temp_foldername+'SR.fa.cps','w')
-    SR_idx_fh = open(temp_foldername+'SR.fa.idx','w')
-    compress_SR(temp_foldername+'SR_uniq.fa',args)
-    SR_cps_fh.close()
-    SR_idx_fh.close()
+    compress_SR(temp_foldername,args)
     sys.stderr.write(str(datetime.datetime.now()-t0)+"\n")
         
   #Handle the case where the input is a set of cps/idx files
@@ -219,6 +215,7 @@ def main():
   # Add in a step here for aligning the reads batch by batch
   # one at a time since disk reads on the files seem to come at a premium
   #step 3 map short reads
+
   if mode == 0 or mode == 2:
     if not os.path.exists(temp_foldername+'/Alignments'):
       os.makedirs(temp_foldername+'/Alignments')
@@ -317,7 +314,7 @@ def remove_duplicate_short_reads(temp_foldername,args):
   cwd = os.path.dirname(os.path.realpath(__file__))
   udir = cwd+'/../utilities'
 
-  cmd4 = 'split -l 1000000 - '+temp_foldername+'Split_Short/unsort.'
+  cmd4 = 'split -l 5000000 - '+temp_foldername+'Split_Short/unsort.'
   p4 = subprocess.Popen(cmd4.split(),stdin=subprocess.PIPE,bufsize=1)
   for SR_pathfilename in args.short_reads:
     #Running these through command line scripts because its faster than python
@@ -364,8 +361,9 @@ def remove_duplicate_short_reads(temp_foldername,args):
     p.join()
   of.close()
 
-  ### Temporary can delete when not debuging (should be fine even if you dont)
-  snames = [temp_foldername+'Split_Short/'+x for x in os.listdir(temp_foldername+'Split_Short') if re.match('^sort',x)]
+  #### Temporary can delete when not debuging (should be fine even if you dont)
+  #snames = [temp_foldername+'Split_Short/'+x for x in os.listdir(temp_foldername+'Split_Short') if re.match('^sort',x)]
+
   # now we can put them back together
   if len(snames)==0:
     sys.stderr.write("ERROR no sorted short reads\n")
@@ -381,6 +379,7 @@ def remove_duplicate_short_reads(temp_foldername,args):
   p2.communicate()
   p1.communicate()
   of.close()
+  for n in snames: os.remove(n)
   z = 0
   output_SR_pathfilename = temp_foldername + "SR_uniq.fa"
   of = open(output_SR_pathfilename,'w')
@@ -403,6 +402,7 @@ def do_sort(path,spath):
   cmd1 = 'sort '+path
   p = subprocess.Popen(cmd1.split(),stdout=of,bufsize=1,stderr=dn)
   p.communicate()
+  os.remove(path)
   return
 
 # Handle homopolymer compressing all the short read sequences
@@ -412,24 +412,48 @@ def do_sort(path,spath):
 # Post: Writes out the compressed sequence through the callback function collect_results
 #       That collect results uses the global file handles SR_cps_fh and SR_idx_fh to write results
 # Modifies: Launch jobs in parallel through Pool
-def compress_SR(short_read_file,args):
-  gfr = GenericFastaFileReader(short_read_file)
-  batchsize = 100000
-  batch = []
-  cpus = args.threads
-  p = Pool(processes=cpus)
-  while True:
-    entry = gfr.read_entry()
-    if not entry: break
-    batch.append([entry['name'],entry['seq']])
-    if len(batch) >= batchsize: # we have enough to process
-      p.apply_async(compress_batch,args=(json.dumps(batch),args.minNumberofNonN,args.maxN,),callback=collect_results)
-      batch = []
-  if len(batch) >= 0:
-    p.apply_async(compress_batch,args=(json.dumps(batch),args.minNumberofNonN,args.maxN,),callback=collect_results)
-  p.close()
-  p.join()
-  gfr.close()
+def compress_SR(temp_filename,args):
+  #Lets split the reads to compress
+  short_read_file = temp_filename+'SR_uniq.fa'
+  cwd = os.path.dirname(os.path.realpath(__file__))
+  udir = cwd+'/../utilities'
+  fcount = None
+
+  cmd = udir+'/explode_fasta.pl 1000000 '+temp_filename+'/Split_Short'
+  inf = open(short_read_file)
+  p = subprocess.Popen(cmd.split(),stdin=inf,stdout=subprocess.PIPE)
+  fcount = int(p.communicate()[0].rstrip())
+
+  if not fcount:
+    fcount = len([x for x in os.listdir(temp_filename+'/Split_Short') if re.match('^\d+\.fa$',x)])
+
+  #sys.stderr.write(str(fcount)+" blocks\n")
+  if args.threads > 1:
+    p = Pool(processes=args.threads)
+  for i in range(1,fcount+1):
+    if args.threads > 1:
+      p.apply_async(compress_batch,args=(temp_filename,i,args.minNumberofNonN,args.maxN,))
+    else:
+      compress_batch(temp_filename,i,args.minNumberofNonN,args.maxN)
+
+  if args.threads > 1:
+    p.close()
+    p.join()
+
+  #rejoin files
+  SR_cps_fh = open(temp_filename+'SR.fa.cps','w')
+  SR_idx_fh = open(temp_filename+'SR.fa.idx','w')
+  for i in range(1,fcount+1):
+    fname1 = temp_filename+'Split_Short/'+str(i)+'.fa.cps'
+    with open(fname1) as inf:
+      for line in inf:  SR_cps_fh.write(line)
+    os.remove(fname1)
+    fname2 = temp_filename+'Split_Short/'+str(i)+'.fa.idx'
+    with open(fname2) as inf:
+      for line in inf:  SR_idx_fh.write(line)
+    os.remove(fname2)
+  SR_cps_fh.close()
+  SR_idx_fh.close()
 
 # Callback function for compress_batch
 # Pre: SR_cps_fh and SR_idx_fh need to be set to writable files
@@ -439,28 +463,42 @@ def compress_SR(short_read_file,args):
 #       and <name> <position array> <length array> for idx
 # Modifies: writes to SR_cps_fh and SR_idx_fh 
 def collect_results(results):
+  global glock
   global SR_cps_fh
   global SR_idx_fh    
+  #sys.stderr.write("output\n")
+  glock.acquire()
   for entry in results:
     SR_cps_fh.write(">"+entry[0]+"\n"+entry[1]+"\n")
     SR_idx_fh.write(entry[0]+"\t"+entry[2]+"\t"+entry[3]+"\n")
+  glock.release()
   return
 
 # Compress batch
-# Pre: json coded batch of sequences for compression, and parameters minNumofNonN and maxN
+# Pre: temp_foldername and index of the split file to process, and parameters minNumofNonN and maxN
 # Post: name, compressed_sequence, possition array and length array
-def compress_batch(seq_batch_json,minNumberofNonN,maxN):
-  seq_batch = json.loads(seq_batch_json)
-  result = []
+def compress_batch(temp_foldername,i,minNumberofNonN,maxN):
+  fname = temp_foldername+'Split_Short/'+str(i)+'.fa'
+  gfr = GenericFastaFileReader(fname)
+  seq_batch = []
   hpcf = HomopolymerCompressionFactory()
   if minNumberofNonN: hpcf.set_MinNonN(minNumberofNonN)
   if maxN: hpcf.set_MaxN(maxN)
-  for entry in seq_batch:
-    res = hpcf.compress(entry[1])
+  of1 = open(temp_foldername+'Split_Short/'+str(i)+'.fa.cps','w')
+  of2 = open(temp_foldername+'Split_Short/'+str(i)+'.fa.idx','w')
+  while True:
+    entry = gfr.read_entry()
+    if not entry: break
+    res = hpcf.compress(entry['seq'])
     if not res: continue
     (cps, pos_ls, len_ls) = res
-    result.append([entry[0],cps,pos_ls,len_ls])
-  return result
+    result = [entry['name'],cps,pos_ls,len_ls]
+    of1.write(">"+result[0]+"\n"+result[1]+"\n")
+    of2.write(result[0]+"\t"+result[2]+"\t"+result[3]+"\n")
+  gfr.close()
+  of1.close()
+  of2.close()
+  os.remove(fname)
 
 #########################################
 # Get the total number of Batches
@@ -596,7 +634,7 @@ def write_nav(temp_foldername,batch_number,threads,i,error_rate_threshold,samtoo
 #      long_read_batch_size is the number of long reads in each batch
 # Post: Creats nav and map files along the way but ultimately stores corrected outputs in the temporary folder 
 # Modifies: Temp files, can execute steps in parallel if parallelized_mode_2 is being run and multiple threads are specified.
-def execute_batch(batch_number,temp_foldername,threads,samtools_path,long_read_batch_size):
+def execute_batch(batch_number,temp_foldername,threads,args,samtools_path,long_read_batch_size):
   if not os.path.exists(temp_foldername+'Log_Files'):
     os.makedirs(temp_foldername+'Log_Files')
   of_log = open(temp_foldername+"Log_Files/LR.fa."+str(batch_number)+'.cps'+'.log3','w')
@@ -611,9 +649,9 @@ def execute_batch(batch_number,temp_foldername,threads,samtools_path,long_read_b
     p = Pool(processes = threads)
   for i in range(1,threads+1):
     if threads > 1:
-       p.apply_async(write_nav,args=(temp_foldername,batch_number,threads,i,error_rate_threshold,samtools_path))
+       p.apply_async(write_nav,args=(temp_foldername,batch_number,threads,i,args.error_rate_threshold,samtools_path))
     else:
-      write_nav(temp_foldername,batch_number,threads,i,error_rate_threshold,samtools_path)
+      write_nav(temp_foldername,batch_number,threads,i,args.error_rate_threshold,samtools_path)
   if threads > 1:
     p.close()
     p.join()
@@ -632,6 +670,7 @@ def execute_batch(batch_number,temp_foldername,threads,samtools_path,long_read_b
   #step 5 sort nav by long read name
   sys.stderr.write("...executing batch "+str(batch_number)+".5 (sort nav)    \r")
   sort_cmd =  "sort -T "+temp_foldername+" "
+  sort_max_mem = args.sort_mem_max
   if sort_max_mem:
     sort_cmd += "-S "+str(sort_max_mem)+" "
   sort_cmd += "-nk 2 " + temp_foldername+ "Nav_Files/LR.fa."+str(batch_number)+".cps.nav "
@@ -648,7 +687,7 @@ def execute_batch(batch_number,temp_foldername,threads,samtools_path,long_read_b
          temp_foldername+"LR_Compressed/"+str(batch_number)+"/LR.fa."+str(batch_number)+".cps", \
          temp_foldername+"LR_Compressed/"+str(batch_number)+"/LR.fa."+str(batch_number)+".idx", \
          temp_foldername+"LR.fa.readnames", \
-         short_read_coverage_threshold)
+         args.short_read_coverage_threshold)
   of_map = open(temp_foldername+"Map_Files/LR_SR.map."+str(batch_number),'w')
   while True:
     entry = ntmf.read_entry()
