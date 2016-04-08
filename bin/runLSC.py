@@ -2,7 +2,7 @@
 
 import argparse, sys, os, json, subprocess, re
 import datetime
-from multiprocessing import cpu_count, Pool, Lock
+from multiprocessing import cpu_count, Pool
 from random import randint
 from shutil import copyfile, move, rmtree
 from SequenceBasics import GenericFastaFileReader, GenericFastqFileReader
@@ -11,8 +11,6 @@ from SamToNavBasics import SamToNavFactory
 from NavToMapBasics import NavToMapFactory
 from CorrectFromMapBasics import CorrectFromMapFactory
 from AlignmentBasics import GenericAlignerCaller, GenericAlignerIndexBuilder
-
-glock = Lock()
 
 def main():
   # Run modes for runLSC.py are
@@ -29,18 +27,18 @@ def main():
   parser.add_argument('--threads',type=int,default=0,help="Number of threads (Default = cpu_count)")
   group = parser.add_mutually_exclusive_group()
   group.add_argument('--tempdir',default='/tmp',help="FOLDERNAME where temporary files can be placed")
-  group.add_argument('--specific_tempdir',help="FOLDERNAME of exactly where to place temproary folders. Required in mode 1, 2 or 3.")
+  group.add_argument('--specific_tempdir',help="FOLDERNAME of exactly where to place temproary folders. Required in mode 1, 2 or 3. Recommended for any run where you may want to look back at intermediate files.")
   parser.add_argument('-o','--output',help="FOLDERNAME where output is to be written. Required in mode 0 or 3.")
   group1 = parser.add_mutually_exclusive_group()
-  group1.add_argument('--mode',default=0,choices=[0,1,2,3],type=int,help="0: run through")
+  group1.add_argument('--mode',default=0,choices=[0,1,2,3],type=int,help="0: run through, 1: Prepare homopolymer compressed long and short reads.  2: Execute correction on batches of long reads.  Can be superseded by --parallelized_mode_2 where you will only execute a single batch.  3: Combine corrected batches into a final output folder.")
   group1.add_argument('--parallelized_mode_2',type=int,help="Mode 2, but you specify a sigle batch to execute.")
-  parser.add_argument('--aligner',default='bowtie2',choices=['hisat','bowtie2'],help="Aligner choice")
+  parser.add_argument('--aligner',default='bowtie2',choices=['hisat','bowtie2'],help="Aligner choice. hisat parameters have not been optimized, so we recommend bowtie2.")
   parser.add_argument('--sort_mem_max',type=int,help="-S option for memory in unix sort")
   parser.add_argument('--minNumberofNonN',type=int,default=40,help="Minimum number of non-N characters in the compressed read")
   parser.add_argument('--maxN',type=int,help="Maximum number of Ns in the compressed read")
   parser.add_argument('--error_rate_threshold',type=int,default=12,help="Maximum percent of errors in a read to use the alignment")
   parser.add_argument('--short_read_coverage_threshold',type=int,default=20,help="Minimum short read coverage to do correction")
-  parser.add_argument('--long_read_batch_size',default=500,type=int,help="INT number of long reads to work on at a time")
+  parser.add_argument('--long_read_batch_size',default=500,type=int,help="INT number of long reads to work on at a time.  This is a key parameter to adjusting performance.  A smaller batch size keeps the sizes and runtimes of intermediate steps tractable on large datasets, but can slow down execution on small datasets.  The default value should be suitable for large datasets.")
   parser.add_argument('--samtools_path',default='samtools',help="Path to samtools by default assumes its installed.  If not specified, the included version will be used.")
   args = parser.parse_args()
   if args.threads == 0:
@@ -409,8 +407,7 @@ def do_sort(path,spath):
 # will work on compressing sequences in batches of the batchsize defined in the function
 # Pre: The short read file (SR_uniq.fa), and the input arguments
 #       globals SR_cps_fh and SR_idx_fh need to point to writable files
-# Post: Writes out the compressed sequence through the callback function collect_results
-#       That collect results uses the global file handles SR_cps_fh and SR_idx_fh to write results
+# Post: Writes out the individusl results
 # Modifies: Launch jobs in parallel through Pool
 def compress_SR(temp_filename,args):
   #Lets split the reads to compress
@@ -454,25 +451,6 @@ def compress_SR(temp_filename,args):
     os.remove(fname2)
   SR_cps_fh.close()
   SR_idx_fh.close()
-
-# Callback function for compress_batch
-# Pre: SR_cps_fh and SR_idx_fh need to be set to writable files
-#      Results contains the compressed data in the form
-#      name, compressed_sequence, position_array, length_array
-# Post: write compressed sequence to file.  Fasta foramt for cps
-#       and <name> <position array> <length array> for idx
-# Modifies: writes to SR_cps_fh and SR_idx_fh 
-def collect_results(results):
-  global glock
-  global SR_cps_fh
-  global SR_idx_fh    
-  #sys.stderr.write("output\n")
-  glock.acquire()
-  for entry in results:
-    SR_cps_fh.write(">"+entry[0]+"\n"+entry[1]+"\n")
-    SR_idx_fh.write(entry[0]+"\t"+entry[2]+"\t"+entry[3]+"\n")
-  glock.release()
-  return
 
 # Compress batch
 # Pre: temp_foldername and index of the split file to process, and parameters minNumofNonN and maxN
