@@ -369,7 +369,7 @@ def remove_duplicate_short_reads(temp_foldername,args):
     sys.stderr.write("ERROR no sorted short reads\n")
     sys.exit()
   # now final merge
-  cmd1 = 'sort --batch-size='+str(len(snames))+' -m'
+  cmd1 = 'sort --batch-size='+str(max(2,len(snames)))+' -m'
   for n in snames:
     cmd1 += ' '+n
   of = open(temp_foldername+'SR_uniq.seq','w')
@@ -830,10 +830,10 @@ def check_argument_mode_compatibility(mode,args):
   # If we are mode 0 or mode 1 make sure we have required parameters
   if mode == 0 or mode == 1:
     if not args.long_reads:
-      sys.stderr.write("ERROR: please specify --long_reads when in mode 0 or mode 1")
+      sys.stderr.write("ERROR: please specify --long_reads when in mode 0 or mode 1\n")
       sys.exit()
     if not args.short_reads:
-      sys.stderr.write("ERROR: please specify --short_reads when in mode 0 or mode 1")
+      sys.stderr.write("ERROR: please specify --short_reads when in mode 0 or mode 1\n")
       sys.exit()
 
   if (mode == 1 or mode == 2) and not args.specific_tempdir:
